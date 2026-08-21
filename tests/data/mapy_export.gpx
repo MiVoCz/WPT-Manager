@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1"
+     version="1.1"
+     creator="https://mapy.com/">
+
+    <wpt lat="43.947070" lon="4.535600">
+        <name>Pont du Gard</name>
+    </wpt>
+
+    <wpt lat="44.216738" lon="5.224684">
+        <name>Gorges du Toulourenc</name>
+    </wpt>
+
+    <wpt lat="43.069735" lon="1.355004">
+        <name>Grotte du Mas d’Azil</name>
+    </wpt>
+
+</gpx>

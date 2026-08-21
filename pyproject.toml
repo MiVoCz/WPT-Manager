@@ -1,5 +1,15 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+
 [project]
 name = "wpt-manager"
 version = "0.1.0"
 description = "Waypoint manager and OsmAnd GPX exporter"
 requires-python = ">=3.14"
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wpt_manager*"]

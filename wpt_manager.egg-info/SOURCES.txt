@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+tests/test_main.py
+wpt_manager/__init__.py
+wpt_manager/__main__.py
+wpt_manager/main.py
+wpt_manager.egg-info/PKG-INFO
+wpt_manager.egg-info/SOURCES.txt
+wpt_manager.egg-info/dependency_links.txt
+wpt_manager.egg-info/top_level.txt

@@ -81,3 +81,75 @@ def test_save_collection_with_duplicate_id_fails(tmp_path):
 
     with pytest.raises(sqlite3.IntegrityError):
         database.save_collection(collection)
+
+
+def test_list_collections(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    first = Collection(
+        name="Francie",
+        description="První kolekce",
+        source="Mapy.com",
+        source_file="francie.gpx",
+    )
+    second = Collection(
+        name="Itálie",
+        description="Druhá kolekce",
+        source="OsmAnd",
+        source_file="italie.gpx",
+    )
+    database.save_collection(first)
+    database.save_collection(second)
+
+    collections = database.list_collections()
+
+    assert collections == [first, second]
+
+
+def test_update_collection(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Původní název")
+    database.save_collection(collection)
+    original_id = collection.id
+
+    collection.name = "Nový název"
+    collection.description = "Nový popis"
+    collection.source = "OsmAnd"
+    collection.source_file = "updated.gpx"
+    database.update_collection(collection)
+    loaded = database.get_collection(original_id)
+
+    assert loaded is not None
+    assert loaded.id == original_id
+    assert loaded.name == "Nový název"
+    assert loaded.description == "Nový popis"
+    assert loaded.source == "OsmAnd"
+    assert loaded.source_file == "updated.gpx"
+
+
+def test_update_missing_collection_fails(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Neexistující")
+
+    with pytest.raises(ValueError, match="Collection does not exist"):
+        database.update_collection(collection)
+
+
+def test_delete_collection(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Výlet do Francie")
+    database.save_collection(collection)
+
+    database.delete_collection(collection.id)
+
+    assert database.get_collection(collection.id) is None
+
+
+def test_delete_missing_collection_does_not_fail(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+
+    database.delete_collection(uuid4())

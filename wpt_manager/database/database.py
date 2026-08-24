@@ -97,3 +97,66 @@ class Database:
             source=row[3],
             source_file=row[4],
         )
+
+    def list_collections(self) -> list[Collection]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT id, name, description, source, source_file
+                FROM collections
+                ORDER BY created_at ASC, rowid ASC
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+
+        return [
+            Collection(
+                id=UUID(row[0]),
+                name=row[1],
+                description=row[2],
+                source=row[3],
+                source_file=row[4],
+            )
+            for row in rows
+        ]
+
+    def update_collection(self, collection: Collection) -> None:
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                """
+                UPDATE collections
+                SET name = ?,
+                    description = ?,
+                    source = ?,
+                    source_file = ?
+                WHERE id = ?
+                """,
+                (
+                    collection.name,
+                    collection.description,
+                    collection.source,
+                    collection.source_file,
+                    str(collection.id),
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Collection does not exist: {collection.id}"
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def delete_collection(self, collection_id: UUID) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM collections WHERE id = ?",
+                (str(collection_id),),
+            )
+            connection.commit()
+        finally:
+            connection.close()

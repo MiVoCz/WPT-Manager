@@ -237,3 +237,88 @@ class Database:
             note=row[7],
             comment=row[8],
         )
+
+    def list_waypoints(self, collection_id: UUID) -> list[Waypoint]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT id,
+                       name,
+                       latitude,
+                       longitude,
+                       icon,
+                       color,
+                       background,
+                       note,
+                       comment
+                FROM waypoints
+                WHERE collection_id = ?
+                ORDER BY rowid ASC
+                """,
+                (str(collection_id),),
+            ).fetchall()
+        finally:
+            connection.close()
+
+        return [
+            Waypoint(
+                id=UUID(row[0]),
+                name=row[1],
+                latitude=row[2],
+                longitude=row[3],
+                icon=row[4],
+                color=row[5],
+                background=row[6],
+                note=row[7],
+                comment=row[8],
+            )
+            for row in rows
+        ]
+
+    def update_waypoint(self, waypoint: Waypoint) -> None:
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                """
+                UPDATE waypoints
+                SET name = ?,
+                    latitude = ?,
+                    longitude = ?,
+                    icon = ?,
+                    color = ?,
+                    background = ?,
+                    note = ?,
+                    comment = ?
+                WHERE id = ?
+                """,
+                (
+                    waypoint.name,
+                    waypoint.latitude,
+                    waypoint.longitude,
+                    waypoint.icon,
+                    waypoint.color,
+                    waypoint.background,
+                    waypoint.note,
+                    waypoint.comment,
+                    str(waypoint.id),
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Waypoint does not exist: {waypoint.id}"
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def delete_waypoint(self, waypoint_id: UUID) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM waypoints WHERE id = ?",
+                (str(waypoint_id),),
+            )
+            connection.commit()
+        finally:
+            connection.close()

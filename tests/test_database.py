@@ -221,3 +221,122 @@ def test_save_waypoint_with_duplicate_id_fails(tmp_path):
 
     with pytest.raises(sqlite3.IntegrityError):
         database.save_waypoint(waypoint, collection.id)
+
+
+def test_list_waypoints_for_collection(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    first_collection = Collection(name="Francie")
+    second_collection = Collection(name="Itálie")
+    database.save_collection(first_collection)
+    database.save_collection(second_collection)
+    first_waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+        icon="historic_archaeological_site",
+        color="#FF8000",
+        background="square",
+        note="Zastavit na focení",
+        comment="Velmi pěkné místo pro delší zastávku.",
+    )
+    second_waypoint = Waypoint(
+        name="Gorges du Toulourenc",
+        latitude=44.216738,
+        longitude=5.224684,
+    )
+    other_waypoint = Waypoint(
+        name="Koloseum",
+        latitude=41.890210,
+        longitude=12.492231,
+    )
+    database.save_waypoint(first_waypoint, first_collection.id)
+    database.save_waypoint(second_waypoint, first_collection.id)
+    database.save_waypoint(other_waypoint, second_collection.id)
+
+    waypoints = database.list_waypoints(first_collection.id)
+
+    assert waypoints == [first_waypoint, second_waypoint]
+
+
+def test_update_waypoint(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Původní název",
+        latitude=1.0,
+        longitude=2.0,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    original_id = waypoint.id
+
+    waypoint.name = "Pont du Gard"
+    waypoint.latitude = 43.947070
+    waypoint.longitude = 4.535600
+    waypoint.icon = "historic_archaeological_site"
+    waypoint.color = "#FF8000"
+    waypoint.background = "square"
+    waypoint.note = "Zastavit na focení"
+    waypoint.comment = "Velmi pěkné místo pro delší zastávku."
+    database.update_waypoint(waypoint)
+    loaded = database.get_waypoint(original_id)
+
+    assert loaded == waypoint
+    assert loaded is not None
+    assert loaded.id == original_id
+
+
+def test_update_missing_waypoint_fails(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    waypoint = Waypoint(
+        name="Neexistující",
+        latitude=1.0,
+        longitude=2.0,
+    )
+
+    with pytest.raises(ValueError, match="Waypoint does not exist"):
+        database.update_waypoint(waypoint)
+
+
+def test_delete_waypoint(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    database.save_waypoint(waypoint, collection.id)
+
+    database.delete_waypoint(waypoint.id)
+
+    assert database.get_waypoint(waypoint.id) is None
+
+
+def test_delete_missing_waypoint_does_not_fail(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+
+    database.delete_waypoint(uuid4())
+
+
+def test_delete_collection_cascades_to_waypoints(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    database.save_waypoint(waypoint, collection.id)
+
+    database.delete_collection(collection.id)
+
+    assert database.get_waypoint(waypoint.id) is None

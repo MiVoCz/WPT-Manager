@@ -2,6 +2,7 @@ import sqlite3
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -55,7 +56,13 @@ class MainWindow(QMainWindow):
         self.name_edit = QLineEdit()
         self.icon_edit = QLineEdit()
         self.color_edit = QLineEdit()
+        self.color_preview = QLabel()
+        self.color_preview.setFixedSize(24, 24)
         self.background_edit = QLineEdit()
+        self.latitude_edit = QLineEdit()
+        self.latitude_edit.setReadOnly(True)
+        self.longitude_edit = QLineEdit()
+        self.longitude_edit.setReadOnly(True)
         self.note_edit = QLineEdit()
         self.comment_edit = QTextEdit()
         self.save_button = QPushButton("Save")
@@ -65,8 +72,16 @@ class MainWindow(QMainWindow):
         editor_form = QFormLayout()
         editor_form.addRow(QLabel("Name"), self.name_edit)
         editor_form.addRow(QLabel("Icon"), self.icon_edit)
-        editor_form.addRow(QLabel("Color"), self.color_edit)
+
+        color_editor = QWidget()
+        color_layout = QHBoxLayout(color_editor)
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        color_layout.addWidget(self.color_edit)
+        color_layout.addWidget(self.color_preview)
+        editor_form.addRow(QLabel("Color"), color_editor)
         editor_form.addRow(QLabel("Background"), self.background_edit)
+        editor_form.addRow(QLabel("Latitude"), self.latitude_edit)
+        editor_form.addRow(QLabel("Longitude"), self.longitude_edit)
         editor_form.addRow(QLabel("Note"), self.note_edit)
         editor_form.addRow(QLabel("Comment"), self.comment_edit)
         editor_layout.addLayout(editor_form)
@@ -94,6 +109,9 @@ class MainWindow(QMainWindow):
         self.collection_list.currentItemChanged.connect(
             self.load_waypoints
         )
+        self.waypoint_list.currentItemChanged.connect(
+            self.load_waypoint
+        )
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -118,6 +136,54 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(waypoint.name)
             item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
             self.waypoint_list.addItem(item)
+
+    def load_waypoint(
+        self,
+        current_item: QListWidgetItem | None,
+        previous_item: QListWidgetItem | None = None,
+    ) -> None:
+        del previous_item
+        self.clear_waypoint_editor()
+        if current_item is None:
+            return
+
+        waypoint_id = current_item.data(Qt.ItemDataRole.UserRole)
+        waypoint = self.database.get_waypoint(waypoint_id)
+        if waypoint is None:
+            return
+
+        self.name_edit.setText(waypoint.name)
+        self.icon_edit.setText(waypoint.icon)
+        self.color_edit.setText(waypoint.color)
+        self.update_color_preview(waypoint.color)
+        self.background_edit.setText(waypoint.background)
+        self.latitude_edit.setText(str(waypoint.latitude))
+        self.longitude_edit.setText(str(waypoint.longitude))
+        self.note_edit.setText(waypoint.note)
+        self.comment_edit.setPlainText(waypoint.comment)
+
+    def clear_waypoint_editor(self) -> None:
+        self.name_edit.clear()
+        self.icon_edit.clear()
+        self.color_edit.clear()
+        self.update_color_preview("")
+        self.background_edit.clear()
+        self.latitude_edit.clear()
+        self.longitude_edit.clear()
+        self.note_edit.clear()
+        self.comment_edit.clear()
+
+    def update_color_preview(self, color_value: str) -> None:
+        color = QColor(color_value)
+        if not color.isValid():
+            self.color_preview.setAutoFillBackground(False)
+            self.color_preview.setPalette(QPalette())
+            return
+
+        palette = self.color_preview.palette()
+        palette.setColor(QPalette.ColorRole.Window, color)
+        self.color_preview.setPalette(palette)
+        self.color_preview.setAutoFillBackground(True)
 
     def import_gpx_file(self) -> None:
         selected_path, _ = QFileDialog.getOpenFileName(

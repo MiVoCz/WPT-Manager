@@ -4,6 +4,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -40,7 +41,13 @@ def test_main_window_defaults(tmp_path):
     assert isinstance(window.name_edit, QLineEdit)
     assert isinstance(window.icon_edit, QLineEdit)
     assert isinstance(window.color_edit, QLineEdit)
+    assert window.color_preview.width() == 24
+    assert window.color_preview.height() == 24
     assert isinstance(window.background_edit, QLineEdit)
+    assert isinstance(window.latitude_edit, QLineEdit)
+    assert window.latitude_edit.isReadOnly()
+    assert isinstance(window.longitude_edit, QLineEdit)
+    assert window.longitude_edit.isReadOnly()
     assert isinstance(window.note_edit, QLineEdit)
     assert isinstance(window.comment_edit, QTextEdit)
 
@@ -123,6 +130,77 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
 
     window.collection_list.setCurrentRow(-1)
     assert window.waypoint_list.count() == 0
+
+    window.close()
+    application.processEvents()
+
+
+def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    empty_collection = Collection(name="Prázdná")
+    database.save_collection(collection)
+    database.save_collection(empty_collection)
+    first_waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+        icon="historic_archaeological_site",
+        color="#FF8000",
+        background="square",
+        note="Zastavit na focení",
+        comment="Velmi pěkné místo pro delší zastávku.",
+    )
+    second_waypoint = Waypoint(
+        name="Gorges du Toulourenc",
+        latitude=44.216738,
+        longitude=5.224684,
+        icon="natural_water",
+        color="invalid-color",
+        background="circle",
+        note="Druhá poznámka",
+        comment="Druhý komentář",
+    )
+    database.save_waypoint(first_waypoint, collection.id)
+    database.save_waypoint(second_waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+
+    window.waypoint_list.setCurrentRow(0)
+
+    assert window.name_edit.text() == first_waypoint.name
+    assert window.icon_edit.text() == first_waypoint.icon
+    assert window.color_edit.text() == first_waypoint.color
+    assert window.color_preview.autoFillBackground()
+    assert window.color_preview.palette().color(
+        QPalette.ColorRole.Window
+    ).name().upper() == first_waypoint.color
+    assert window.background_edit.text() == first_waypoint.background
+    assert window.latitude_edit.text() == str(first_waypoint.latitude)
+    assert window.longitude_edit.text() == str(first_waypoint.longitude)
+    assert window.note_edit.text() == first_waypoint.note
+    assert window.comment_edit.toPlainText() == first_waypoint.comment
+
+    window.waypoint_list.setCurrentRow(1)
+    assert window.name_edit.text() == second_waypoint.name
+    assert window.color_edit.text() == second_waypoint.color
+    assert not window.color_preview.autoFillBackground()
+    assert window.latitude_edit.text() == str(second_waypoint.latitude)
+    assert window.comment_edit.toPlainText() == second_waypoint.comment
+
+    window.collection_list.setCurrentRow(1)
+    assert window.waypoint_list.count() == 0
+    assert window.name_edit.text() == ""
+    assert window.icon_edit.text() == ""
+    assert window.color_edit.text() == ""
+    assert not window.color_preview.autoFillBackground()
+    assert window.background_edit.text() == ""
+    assert window.latitude_edit.text() == ""
+    assert window.longitude_edit.text() == ""
+    assert window.note_edit.text() == ""
+    assert window.comment_edit.toPlainText() == ""
 
     window.close()
     application.processEvents()

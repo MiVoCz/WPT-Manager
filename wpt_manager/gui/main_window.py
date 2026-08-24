@@ -1,12 +1,19 @@
+import sqlite3
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTextEdit,
@@ -14,10 +21,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from wpt_manager.database.database import Database
+from wpt_manager.io.exceptions import GpxReaderError
+from wpt_manager.io.gpx_importer import import_gpx
+
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, database: Database) -> None:
         super().__init__()
+        self.database = database
         self.setWindowTitle("WPT-Manager")
         self.resize(1000, 700)
 
@@ -77,3 +89,54 @@ class MainWindow(QMainWindow):
         central_layout = QVBoxLayout(central_widget)
         central_layout.addWidget(self.main_splitter)
         self.setCentralWidget(central_widget)
+
+        self.import_button.clicked.connect(self.import_gpx_file)
+        self.load_collections()
+
+    def load_collections(self) -> None:
+        self.collection_list.clear()
+        for collection in self.database.list_collections():
+            item = QListWidgetItem(collection.name)
+            item.setData(Qt.ItemDataRole.UserRole, collection.id)
+            self.collection_list.addItem(item)
+
+    def import_gpx_file(self) -> None:
+        selected_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import GPX",
+            "",
+            "GPX files (*.gpx)",
+        )
+        if not selected_path:
+            return
+
+        source_path = Path(selected_path)
+        collection_name, accepted = QInputDialog.getText(
+            self,
+            "Import GPX",
+            "Collection name:",
+            text=source_path.stem,
+        )
+        if not accepted or not collection_name.strip():
+            return
+
+        try:
+            collection = import_gpx(
+                self.database,
+                source_path,
+                collection_name.strip(),
+            )
+        except (GpxReaderError, sqlite3.Error) as exc:
+            QMessageBox.critical(
+                self,
+                "Import GPX failed",
+                f"The GPX file could not be imported:\n{exc}",
+            )
+            return
+
+        self.load_collections()
+        QMessageBox.information(
+            self,
+            "Import GPX",
+            f'Collection "{collection.name}" was imported.',
+        )

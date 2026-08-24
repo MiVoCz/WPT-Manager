@@ -91,6 +91,9 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         self.import_button.clicked.connect(self.import_gpx_file)
+        self.collection_list.currentItemChanged.connect(
+            self.load_waypoints
+        )
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -99,6 +102,22 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(collection.name)
             item.setData(Qt.ItemDataRole.UserRole, collection.id)
             self.collection_list.addItem(item)
+
+    def load_waypoints(
+        self,
+        current_item: QListWidgetItem | None,
+        previous_item: QListWidgetItem | None = None,
+    ) -> None:
+        del previous_item
+        self.waypoint_list.clear()
+        if current_item is None:
+            return
+
+        collection_id = current_item.data(Qt.ItemDataRole.UserRole)
+        for waypoint in self.database.list_waypoints(collection_id):
+            item = QListWidgetItem(waypoint.name)
+            item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
+            self.waypoint_list.addItem(item)
 
     def import_gpx_file(self) -> None:
         selected_path, _ = QFileDialog.getOpenFileName(

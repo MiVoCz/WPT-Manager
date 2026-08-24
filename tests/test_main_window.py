@@ -17,6 +17,7 @@ from wpt_manager.database.database import Database
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.models.collection import Collection
+from wpt_manager.models.waypoint import Waypoint
 
 
 TEST_DATA = Path(__file__).parent / "data" / "mapy_export.gpx"
@@ -72,6 +73,56 @@ def test_main_window_loads_collections_with_uuid(tmp_path):
     assert window.collection_list.item(1).data(
         Qt.ItemDataRole.UserRole
     ) == second.id
+
+    window.close()
+    application.processEvents()
+
+
+def test_selecting_collection_loads_its_waypoints(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    first_collection = Collection(name="Francie")
+    second_collection = Collection(name="Itálie")
+    empty_collection = Collection(name="Prázdná")
+    database.save_collection(first_collection)
+    database.save_collection(second_collection)
+    database.save_collection(empty_collection)
+    first_waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    second_waypoint = Waypoint(
+        name="Koloseum",
+        latitude=41.890210,
+        longitude=12.492231,
+    )
+    database.save_waypoint(first_waypoint, first_collection.id)
+    database.save_waypoint(second_waypoint, second_collection.id)
+    window = MainWindow(database)
+
+    assert window.waypoint_list.count() == 0
+
+    window.collection_list.setCurrentRow(0)
+    assert window.waypoint_list.count() == 1
+    assert window.waypoint_list.item(0).text() == "Pont du Gard"
+    assert window.waypoint_list.item(0).data(
+        Qt.ItemDataRole.UserRole
+    ) == first_waypoint.id
+
+    window.collection_list.setCurrentRow(1)
+    assert window.waypoint_list.count() == 1
+    assert window.waypoint_list.item(0).text() == "Koloseum"
+    assert window.waypoint_list.item(0).data(
+        Qt.ItemDataRole.UserRole
+    ) == second_waypoint.id
+
+    window.collection_list.setCurrentRow(2)
+    assert window.waypoint_list.count() == 0
+
+    window.collection_list.setCurrentRow(-1)
+    assert window.waypoint_list.count() == 0
 
     window.close()
     application.processEvents()

@@ -5,6 +5,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QFileDialog,
+    QColorDialog,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -59,7 +61,9 @@ class MainWindow(QMainWindow):
         self.color_edit = QLineEdit()
         self.color_preview = QLabel()
         self.color_preview.setFixedSize(24, 24)
-        self.background_edit = QLineEdit()
+        self.color_button = QPushButton("Choose color")
+        self.background_combo = QComboBox()
+        self.background_combo.addItems(["circle", "square", "octagon"])
         self.latitude_edit = QLineEdit()
         self.latitude_edit.setReadOnly(True)
         self.longitude_edit = QLineEdit()
@@ -80,8 +84,9 @@ class MainWindow(QMainWindow):
         color_layout.setContentsMargins(0, 0, 0, 0)
         color_layout.addWidget(self.color_edit)
         color_layout.addWidget(self.color_preview)
+        color_layout.addWidget(self.color_button)
         editor_form.addRow(QLabel("Color"), color_editor)
-        editor_form.addRow(QLabel("Background"), self.background_edit)
+        editor_form.addRow(QLabel("Background"), self.background_combo)
         editor_form.addRow(QLabel("Latitude"), self.latitude_edit)
         editor_form.addRow(QLabel("Longitude"), self.longitude_edit)
         editor_form.addRow(QLabel("Note"), self.note_edit)
@@ -115,6 +120,7 @@ class MainWindow(QMainWindow):
             self.load_waypoint
         )
         self.save_button.clicked.connect(self.save_waypoint)
+        self.color_button.clicked.connect(self.choose_color)
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -159,7 +165,7 @@ class MainWindow(QMainWindow):
         self.icon_edit.setText(waypoint.icon)
         self.color_edit.setText(waypoint.color)
         self.update_color_preview(waypoint.color)
-        self.background_edit.setText(waypoint.background)
+        self.background_combo.setCurrentText(waypoint.background)
         self.latitude_edit.setText(str(waypoint.latitude))
         self.longitude_edit.setText(str(waypoint.longitude))
         self.note_edit.setText(waypoint.note)
@@ -171,7 +177,7 @@ class MainWindow(QMainWindow):
         self.icon_edit.clear()
         self.color_edit.clear()
         self.update_color_preview("")
-        self.background_edit.clear()
+        self.background_combo.setCurrentIndex(-1)
         self.latitude_edit.clear()
         self.longitude_edit.clear()
         self.note_edit.clear()
@@ -190,6 +196,22 @@ class MainWindow(QMainWindow):
         self.color_preview.setPalette(palette)
         self.color_preview.setAutoFillBackground(True)
 
+    def choose_color(self) -> None:
+        initial_color = QColor(self.color_edit.text())
+        selected_color = QColorDialog.getColor(
+            initial_color,
+            self,
+            "Select color",
+        )
+        if not selected_color.isValid():
+            return
+
+        color_value = selected_color.name(
+            QColor.NameFormat.HexRgb
+        ).upper()
+        self.color_edit.setText(color_value)
+        self.update_color_preview(color_value)
+
     def save_waypoint(self) -> None:
         current_item = self.waypoint_list.currentItem()
         if current_item is None:
@@ -204,7 +226,7 @@ class MainWindow(QMainWindow):
         waypoint.name = self.name_edit.text()
         waypoint.icon = self.icon_edit.text()
         waypoint.color = self.color_edit.text()
-        waypoint.background = self.background_edit.text()
+        waypoint.background = self.background_combo.currentText()
         waypoint.note = self.note_edit.text()
         waypoint.comment = self.comment_edit.toPlainText()
 
@@ -213,6 +235,10 @@ class MainWindow(QMainWindow):
             errors.append(
                 "Waypoint color must be a valid Qt color or HEX value."
             )
+        else:
+            waypoint.color = QColor(waypoint.color).name(
+                QColor.NameFormat.HexRgb
+            ).upper()
 
         if errors:
             QMessageBox.warning(

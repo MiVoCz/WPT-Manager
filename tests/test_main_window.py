@@ -6,9 +6,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
+    QComboBox,
     QFileDialog,
     QInputDialog,
     QLineEdit,
@@ -45,7 +47,11 @@ def test_main_window_defaults(tmp_path):
     assert isinstance(window.color_edit, QLineEdit)
     assert window.color_preview.width() == 24
     assert window.color_preview.height() == 24
-    assert isinstance(window.background_edit, QLineEdit)
+    assert isinstance(window.background_combo, QComboBox)
+    assert [
+        window.background_combo.itemText(index)
+        for index in range(window.background_combo.count())
+    ] == ["circle", "square", "octagon"]
     assert isinstance(window.latitude_edit, QLineEdit)
     assert window.latitude_edit.isReadOnly()
     assert isinstance(window.longitude_edit, QLineEdit)
@@ -55,6 +61,7 @@ def test_main_window_defaults(tmp_path):
 
     assert window.import_button.text() == "Import GPX"
     assert window.export_button.text() == "Export GPX"
+    assert window.color_button.text() == "Choose color"
     assert window.save_button.text() == "Save"
     assert not window.save_button.isEnabled()
     assert window.collection_list.count() == 0
@@ -181,7 +188,7 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     assert window.color_preview.palette().color(
         QPalette.ColorRole.Window
     ).name().upper() == first_waypoint.color
-    assert window.background_edit.text() == first_waypoint.background
+    assert window.background_combo.currentText() == first_waypoint.background
     assert window.latitude_edit.text() == str(first_waypoint.latitude)
     assert window.longitude_edit.text() == str(first_waypoint.longitude)
     assert window.note_edit.text() == first_waypoint.note
@@ -200,7 +207,7 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     assert window.icon_edit.text() == ""
     assert window.color_edit.text() == ""
     assert not window.color_preview.autoFillBackground()
-    assert window.background_edit.text() == ""
+    assert window.background_combo.currentText() == ""
     assert window.latitude_edit.text() == ""
     assert window.longitude_edit.text() == ""
     assert window.note_edit.text() == ""
@@ -235,8 +242,8 @@ def test_save_button_updates_selected_waypoint(tmp_path, monkeypatch):
 
     window.name_edit.setText("Pont du Gard")
     window.icon_edit.setText("historic_archaeological_site")
-    window.color_edit.setText("#FF8000")
-    window.background_edit.setText("square")
+    window.color_edit.setText("#ff8000")
+    window.background_combo.setCurrentText("square")
     window.note_edit.setText("Zastavit na focení")
     window.comment_edit.setPlainText(
         "Velmi pěkné místo pro delší zastávku."
@@ -262,6 +269,48 @@ def test_save_button_updates_selected_waypoint(tmp_path, monkeypatch):
     assert window.name_edit.text() == "Pont du Gard"
     assert window.color_preview.autoFillBackground()
     assert messages == ['Waypoint "Pont du Gard" was saved.']
+
+    window.close()
+    application.processEvents()
+
+
+def test_color_button_updates_color_and_handles_cancel(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    window = MainWindow(database)
+    initial_colors = []
+
+    def select_color(initial_color, *args, **kwargs):
+        initial_colors.append(initial_color.name().upper())
+        return QColor("#123456")
+
+    window.color_edit.setText("#FF8000")
+    monkeypatch.setattr(QColorDialog, "getColor", select_color)
+
+    window.color_button.click()
+
+    assert initial_colors == ["#FF8000"]
+    assert window.color_edit.text() == "#123456"
+    assert window.color_preview.autoFillBackground()
+    assert window.color_preview.palette().color(
+        QPalette.ColorRole.Window
+    ).name().upper() == "#123456"
+
+    monkeypatch.setattr(
+        QColorDialog,
+        "getColor",
+        lambda *args, **kwargs: QColor(),
+    )
+    window.color_button.click()
+
+    assert window.color_edit.text() == "#123456"
+    assert window.color_preview.palette().color(
+        QPalette.ColorRole.Window
+    ).name().upper() == "#123456"
 
     window.close()
     application.processEvents()

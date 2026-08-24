@@ -1,8 +1,10 @@
 import os
+import sqlite3
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
@@ -54,6 +56,7 @@ def test_main_window_defaults(tmp_path):
     assert window.import_button.text() == "Import GPX"
     assert window.export_button.text() == "Export GPX"
     assert window.save_button.text() == "Save"
+    assert not window.save_button.isEnabled()
     assert window.collection_list.count() == 0
 
     window.close()
@@ -170,6 +173,7 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
 
     window.waypoint_list.setCurrentRow(0)
 
+    assert window.save_button.isEnabled()
     assert window.name_edit.text() == first_waypoint.name
     assert window.icon_edit.text() == first_waypoint.icon
     assert window.color_edit.text() == first_waypoint.color
@@ -201,6 +205,153 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     assert window.longitude_edit.text() == ""
     assert window.note_edit.text() == ""
     assert window.comment_edit.toPlainText() == ""
+    assert not window.save_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_save_button_updates_selected_waypoint(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Původní název",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: messages.append(args[2]),
+    )
+
+    window.name_edit.setText("Pont du Gard")
+    window.icon_edit.setText("historic_archaeological_site")
+    window.color_edit.setText("#FF8000")
+    window.background_edit.setText("square")
+    window.note_edit.setText("Zastavit na focení")
+    window.comment_edit.setPlainText(
+        "Velmi pěkné místo pro delší zastávku."
+    )
+    window.save_button.click()
+
+    loaded = database.get_waypoint(waypoint.id)
+    assert loaded is not None
+    assert loaded.id == waypoint.id
+    assert loaded.name == "Pont du Gard"
+    assert loaded.latitude == waypoint.latitude
+    assert loaded.longitude == waypoint.longitude
+    assert loaded.icon == "historic_archaeological_site"
+    assert loaded.color == "#FF8000"
+    assert loaded.background == "square"
+    assert loaded.note == "Zastavit na focení"
+    assert loaded.comment == "Velmi pěkné místo pro delší zastávku."
+    assert window.waypoint_list.currentItem() is not None
+    assert window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == waypoint.id
+    assert window.waypoint_list.currentItem().text() == "Pont du Gard"
+    assert window.name_edit.text() == "Pont du Gard"
+    assert window.color_preview.autoFillBackground()
+    assert messages == ['Waypoint "Pont du Gard" was saved.']
+
+    window.close()
+    application.processEvents()
+
+
+@pytest.mark.parametrize(
+    ("name", "color", "expected_error"),
+    [
+        ("", "#FF0000", "Waypoint name cannot be empty."),
+        (
+            "Pont du Gard",
+            "invalid-color",
+            "Waypoint color must be a valid Qt color or HEX value.",
+        ),
+    ],
+)
+def test_save_button_rejects_invalid_values(
+    tmp_path,
+    monkeypatch,
+    name,
+    color,
+    expected_error,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Původní název",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: messages.append(args[2]),
+    )
+
+    window.name_edit.setText(name)
+    window.color_edit.setText(color)
+    window.save_button.click()
+
+    loaded = database.get_waypoint(waypoint.id)
+    assert loaded == waypoint
+    assert messages == [expected_error]
+
+    window.close()
+    application.processEvents()
+
+
+def test_save_button_handles_database_error(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    messages = []
+    monkeypatch.setattr(
+        database,
+        "update_waypoint",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            sqlite3.OperationalError("Database is locked")
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: messages.append(args[2]),
+    )
+
+    window.save_button.click()
+
+    assert messages == [
+        "The waypoint could not be saved:\nDatabase is locked"
+    ]
 
     window.close()
     application.processEvents()

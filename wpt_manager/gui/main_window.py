@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from wpt_manager.database.database import Database
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_importer import import_gpx
+from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 
 class MainWindow(QMainWindow):
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         self.note_edit = QLineEdit()
         self.comment_edit = QTextEdit()
         self.save_button = QPushButton("Save")
+        self.save_button.setEnabled(False)
 
         editor_panel = QGroupBox("Waypoint editor")
         editor_layout = QVBoxLayout(editor_panel)
@@ -112,6 +114,7 @@ class MainWindow(QMainWindow):
         self.waypoint_list.currentItemChanged.connect(
             self.load_waypoint
         )
+        self.save_button.clicked.connect(self.save_waypoint)
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -161,6 +164,7 @@ class MainWindow(QMainWindow):
         self.longitude_edit.setText(str(waypoint.longitude))
         self.note_edit.setText(waypoint.note)
         self.comment_edit.setPlainText(waypoint.comment)
+        self.save_button.setEnabled(True)
 
     def clear_waypoint_editor(self) -> None:
         self.name_edit.clear()
@@ -172,6 +176,7 @@ class MainWindow(QMainWindow):
         self.longitude_edit.clear()
         self.note_edit.clear()
         self.comment_edit.clear()
+        self.save_button.setEnabled(False)
 
     def update_color_preview(self, color_value: str) -> None:
         color = QColor(color_value)
@@ -184,6 +189,56 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.ColorRole.Window, color)
         self.color_preview.setPalette(palette)
         self.color_preview.setAutoFillBackground(True)
+
+    def save_waypoint(self) -> None:
+        current_item = self.waypoint_list.currentItem()
+        if current_item is None:
+            return
+
+        waypoint_id = current_item.data(Qt.ItemDataRole.UserRole)
+        waypoint = self.database.get_waypoint(waypoint_id)
+        if waypoint is None:
+            self.clear_waypoint_editor()
+            return
+
+        waypoint.name = self.name_edit.text()
+        waypoint.icon = self.icon_edit.text()
+        waypoint.color = self.color_edit.text()
+        waypoint.background = self.background_edit.text()
+        waypoint.note = self.note_edit.text()
+        waypoint.comment = self.comment_edit.toPlainText()
+
+        errors = validate_waypoint(waypoint)
+        if not QColor(waypoint.color).isValid():
+            errors.append(
+                "Waypoint color must be a valid Qt color or HEX value."
+            )
+
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Invalid waypoint",
+                "\n".join(errors),
+            )
+            return
+
+        try:
+            self.database.update_waypoint(waypoint)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Save waypoint failed",
+                f"The waypoint could not be saved:\n{exc}",
+            )
+            return
+
+        current_item.setText(waypoint.name)
+        self.load_waypoint(current_item)
+        QMessageBox.information(
+            self,
+            "Save waypoint",
+            f'Waypoint "{waypoint.name}" was saved.',
+        )
 
     def import_gpx_file(self) -> None:
         selected_path, _ = QFileDialog.getOpenFileName(

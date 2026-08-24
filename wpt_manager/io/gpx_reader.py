@@ -7,6 +7,7 @@ from .exceptions import GpxReaderError
 
 
 GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
+OSMAND_NAMESPACE = "https://osmand.net"
 
 
 def load_gpx(path: str | Path) -> list[Waypoint]:
@@ -35,12 +36,45 @@ def load_gpx(path: str | Path) -> list[Waypoint]:
         if name_element is not None and name_element.text:
             name = name_element.text
 
-        waypoints.append(
-            Waypoint(
-                name=name,
-                latitude=latitude,
-                longitude=longitude,
-            )
+        waypoint = Waypoint(
+            name=name,
+            latitude=latitude,
+            longitude=longitude,
         )
+
+        desc_element = element.find(f"{{{GPX_NAMESPACE}}}desc")
+        if desc_element is not None and desc_element.text is not None:
+            waypoint.note = desc_element.text
+
+        cmt_element = element.find(f"{{{GPX_NAMESPACE}}}cmt")
+        if cmt_element is not None and cmt_element.text is not None:
+            waypoint.comment = cmt_element.text
+
+        extensions_element = element.find(
+            f"{{{GPX_NAMESPACE}}}extensions"
+        )
+        if extensions_element is not None:
+            icon_element = extensions_element.find(
+                f"{{{OSMAND_NAMESPACE}}}icon"
+            )
+            if icon_element is not None and icon_element.text is not None:
+                waypoint.icon = icon_element.text
+
+            background_element = extensions_element.find(
+                f"{{{OSMAND_NAMESPACE}}}background"
+            )
+            if (
+                background_element is not None
+                and background_element.text is not None
+            ):
+                waypoint.background = background_element.text
+
+            color_element = extensions_element.find(
+                f"{{{OSMAND_NAMESPACE}}}color"
+            )
+            if color_element is not None and color_element.text is not None:
+                waypoint.color = color_element.text
+
+        waypoints.append(waypoint)
 
     return waypoints

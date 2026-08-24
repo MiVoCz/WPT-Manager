@@ -1,5 +1,8 @@
 import sqlite3
 from pathlib import Path
+from uuid import UUID
+
+from wpt_manager.models.collection import Collection
 
 
 class Database:
@@ -44,3 +47,53 @@ class Database:
             connection.commit()
         finally:
             connection.close()
+
+    def save_collection(self, collection: Collection) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                """
+                INSERT INTO collections (
+                    id,
+                    name,
+                    description,
+                    source,
+                    source_file
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(collection.id),
+                    collection.name,
+                    collection.description,
+                    collection.source,
+                    collection.source_file,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def get_collection(self, collection_id: UUID) -> Collection | None:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT id, name, description, source, source_file
+                FROM collections
+                WHERE id = ?
+                """,
+                (str(collection_id),),
+            ).fetchone()
+        finally:
+            connection.close()
+
+        if row is None:
+            return None
+
+        return Collection(
+            id=UUID(row[0]),
+            name=row[1],
+            description=row[2],
+            source=row[3],
+            source_file=row[4],
+        )

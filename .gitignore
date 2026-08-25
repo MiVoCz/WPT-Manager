@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 .vscode/
 data/wpt_manager.db
+data/icons/

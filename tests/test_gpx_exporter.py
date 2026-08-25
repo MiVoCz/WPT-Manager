@@ -73,7 +73,7 @@ def test_export_collection_gpx(tmp_path):
             waypoint.background,
             waypoint.color,
         )
-        for waypoint in [first_waypoint, second_waypoint]
+        for waypoint in [second_waypoint, first_waypoint]
     ]
 
 

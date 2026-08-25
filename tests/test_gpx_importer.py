@@ -33,9 +33,9 @@ def test_import_gpx(tmp_path):
         (waypoint.name, waypoint.latitude, waypoint.longitude)
         for waypoint in waypoints
     ] == [
-        ("Pont du Gard", 43.947070, 4.535600),
         ("Gorges du Toulourenc", 44.216738, 5.224684),
         ("Grotte du Mas d’Azil", 43.069735, 1.355004),
+        ("Pont du Gard", 43.947070, 4.535600),
     ]
 
 

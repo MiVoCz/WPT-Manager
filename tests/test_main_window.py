@@ -76,6 +76,11 @@ def test_main_window_defaults(tmp_path):
     assert window.waypoint_list.selectionMode() == (
         QAbstractItemView.SelectionMode.ExtendedSelection
     )
+    assert [
+        window.waypoint_sort_combo.itemText(index)
+        for index in range(window.waypoint_sort_combo.count())
+    ] == ["Name", "Added"]
+    assert window.waypoint_sort_combo.currentData() == "name"
 
     window.close()
     application.processEvents()
@@ -158,6 +163,52 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     application.processEvents()
 
 
+def test_waypoint_sort_combo_reloads_and_preserves_selection(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    zulu = Waypoint(name="Zulu", latitude=1.0, longitude=1.0)
+    alpha = Waypoint(name="alpha", latitude=2.0, longitude=2.0)
+    database.save_waypoint(zulu, collection.id)
+    database.save_waypoint(alpha, collection.id)
+    connection = sqlite3.connect(database.path)
+    connection.execute(
+        "UPDATE waypoints SET created_at = ? WHERE id = ?",
+        ("2026-01-01 00:00:00", str(zulu.id)),
+    )
+    connection.execute(
+        "UPDATE waypoints SET created_at = ? WHERE id = ?",
+        ("2026-01-02 00:00:00", str(alpha.id)),
+    )
+    connection.commit()
+    connection.close()
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+
+    assert [
+        window.waypoint_list.item(index).text()
+        for index in range(window.waypoint_list.count())
+    ] == ["alpha", "Zulu"]
+    for index in range(window.waypoint_list.count()):
+        window.waypoint_list.item(index).setSelected(True)
+
+    window.waypoint_sort_combo.setCurrentIndex(1)
+
+    assert [
+        window.waypoint_list.item(index).text()
+        for index in range(window.waypoint_list.count())
+    ] == ["Zulu", "alpha"]
+    assert {
+        item.data(Qt.ItemDataRole.UserRole)
+        for item in window.waypoint_list.selectedItems()
+    } == {zulu.id, alpha.id}
+
+    window.close()
+    application.processEvents()
+
+
 def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")
@@ -191,7 +242,7 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     window = MainWindow(database)
     window.collection_list.setCurrentRow(0)
 
-    window.waypoint_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(1)
 
     assert window.save_button.isEnabled()
     assert window.name_edit.text() == first_waypoint.name
@@ -207,7 +258,7 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     assert window.note_edit.text() == first_waypoint.note
     assert window.comment_edit.toPlainText() == first_waypoint.comment
 
-    window.waypoint_list.setCurrentRow(1)
+    window.waypoint_list.setCurrentRow(0)
     assert window.name_edit.text() == second_waypoint.name
     assert window.color_edit.text() == second_waypoint.color
     assert not window.color_preview.autoFillBackground()
@@ -254,8 +305,13 @@ def test_multiple_waypoint_selection_enables_bulk_editor(tmp_path):
     window = MainWindow(database)
     window.collection_list.setCurrentRow(0)
 
-    first_item = window.waypoint_list.item(0)
-    second_item = window.waypoint_list.item(1)
+    items_by_id = {
+        window.waypoint_list.item(index).data(Qt.ItemDataRole.UserRole):
+            window.waypoint_list.item(index)
+        for index in range(window.waypoint_list.count())
+    }
+    first_item = items_by_id[first.id]
+    second_item = items_by_id[second.id]
     first_item.setSelected(True)
     second_item.setSelected(True)
 

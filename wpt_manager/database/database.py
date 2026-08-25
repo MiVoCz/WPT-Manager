@@ -40,14 +40,62 @@ class Database:
                     background TEXT NOT NULL,
                     note TEXT NOT NULL,
                     comment TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (collection_id)
                         REFERENCES collections(id) ON DELETE CASCADE
                 );
                 """
             )
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(waypoints)"
+                ).fetchall()
+            }
+            if "created_at" not in columns:
+                self._migrate_waypoints_created_at(connection)
             connection.commit()
         finally:
             connection.close()
+
+    @staticmethod
+    def _migrate_waypoints_created_at(
+        connection: sqlite3.Connection,
+    ) -> None:
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+
+            CREATE TABLE waypoints_new (
+                id TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                icon TEXT NOT NULL,
+                color TEXT NOT NULL,
+                background TEXT NOT NULL,
+                note TEXT NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (collection_id)
+                    REFERENCES collections(id) ON DELETE CASCADE
+            );
+
+            INSERT INTO waypoints_new (
+                id, collection_id, name, latitude, longitude,
+                icon, color, background, note, comment, created_at
+            )
+            SELECT id, collection_id, name, latitude, longitude,
+                   icon, color, background, note, comment,
+                   CURRENT_TIMESTAMP
+            FROM waypoints;
+
+            DROP TABLE waypoints;
+            ALTER TABLE waypoints_new RENAME TO waypoints;
+            COMMIT;
+            """
+        )
 
     def save_collection(self, collection: Collection) -> None:
         connection = self._connect()
@@ -106,7 +154,7 @@ class Database:
                 """
                 SELECT id, name, description, source, source_file
                 FROM collections
-                ORDER BY created_at ASC, rowid ASC
+                ORDER BY name COLLATE NOCASE ASC, id ASC
                 """
             ).fetchall()
         finally:
@@ -238,11 +286,22 @@ class Database:
             comment=row[8],
         )
 
-    def list_waypoints(self, collection_id: UUID) -> list[Waypoint]:
+    def list_waypoints(
+        self,
+        collection_id: UUID,
+        sort_by: str = "name",
+    ) -> list[Waypoint]:
+        order_by = {
+            "name": "name COLLATE NOCASE ASC, id ASC",
+            "created_at": "created_at ASC, id ASC",
+        }.get(sort_by)
+        if order_by is None:
+            raise ValueError(f"Unsupported waypoint sort: {sort_by}")
+
         connection = self._connect()
         try:
             rows = connection.execute(
-                """
+                f"""
                 SELECT id,
                        name,
                        latitude,
@@ -254,8 +313,8 @@ class Database:
                        comment
                 FROM waypoints
                 WHERE collection_id = ?
-                ORDER BY rowid ASC
-                """,
+                ORDER BY {order_by}
+                """,  # nosec B608: order_by comes from the fixed map above
                 (str(collection_id),),
             ).fetchall()
         finally:

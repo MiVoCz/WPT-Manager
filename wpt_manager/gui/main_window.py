@@ -77,9 +77,13 @@ class MainWindow(QMainWindow):
         self.waypoint_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
+        self.waypoint_sort_combo = QComboBox()
+        self.waypoint_sort_combo.addItem("Name", "name")
+        self.waypoint_sort_combo.addItem("Added", "created_at")
 
         waypoint_panel = QGroupBox("Waypoints")
         waypoint_layout = QVBoxLayout(waypoint_panel)
+        waypoint_layout.addWidget(self.waypoint_sort_combo)
         waypoint_layout.addWidget(self.waypoint_list)
 
         self.name_edit = QLineEdit()
@@ -161,6 +165,9 @@ class MainWindow(QMainWindow):
         self.waypoint_list.itemSelectionChanged.connect(
             self.update_waypoint_selection
         )
+        self.waypoint_sort_combo.currentIndexChanged.connect(
+            self.reload_sorted_waypoints
+        )
         self.save_button.clicked.connect(self.save_waypoint)
         self.export_button.clicked.connect(self.export_gpx_file)
         self.color_button.clicked.connect(self.choose_color)
@@ -196,10 +203,31 @@ class MainWindow(QMainWindow):
             return
 
         collection_id = current_item.data(Qt.ItemDataRole.UserRole)
-        for waypoint in self.database.list_waypoints(collection_id):
+        for waypoint in self.database.list_waypoints(
+            collection_id,
+            self.waypoint_sort_combo.currentData(),
+        ):
             item = QListWidgetItem(waypoint.name)
             item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
             self.waypoint_list.addItem(item)
+
+    def reload_sorted_waypoints(self) -> None:
+        collection_item = self.collection_list.currentItem()
+        if collection_item is None:
+            return
+
+        selected_ids = {
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.waypoint_list.selectedItems()
+        }
+        self.load_waypoints(collection_item)
+        self.waypoint_list.blockSignals(True)
+        for index in range(self.waypoint_list.count()):
+            item = self.waypoint_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) in selected_ids:
+                item.setSelected(True)
+        self.waypoint_list.blockSignals(False)
+        self.update_waypoint_selection()
 
     def load_waypoint(
         self,

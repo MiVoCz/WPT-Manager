@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
         self.import_button = QPushButton("Import GPX")
         self.export_button = QPushButton("Export GPX")
         self.export_button.setEnabled(False)
+        self.delete_collection_button = QPushButton("Delete Collection")
+        self.delete_collection_button.setEnabled(False)
 
         collection_panel = QGroupBox("Collections")
         collection_layout = QVBoxLayout(collection_panel)
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         collection_buttons = QHBoxLayout()
         collection_buttons.addWidget(self.import_button)
         collection_buttons.addWidget(self.export_button)
+        collection_buttons.addWidget(self.delete_collection_button)
         collection_layout.addLayout(collection_buttons)
 
         self.waypoint_list = QListWidget()
@@ -80,11 +83,14 @@ class MainWindow(QMainWindow):
         self.waypoint_sort_combo = QComboBox()
         self.waypoint_sort_combo.addItem("Name", "name")
         self.waypoint_sort_combo.addItem("Added", "created_at")
+        self.delete_waypoints_button = QPushButton("Delete Waypoint(s)")
+        self.delete_waypoints_button.setEnabled(False)
 
         waypoint_panel = QGroupBox("Waypoints")
         waypoint_layout = QVBoxLayout(waypoint_panel)
         waypoint_layout.addWidget(self.waypoint_sort_combo)
         waypoint_layout.addWidget(self.waypoint_list)
+        waypoint_layout.addWidget(self.delete_waypoints_button)
 
         self.name_edit = QLineEdit()
         self.icon_edit = QLineEdit()
@@ -159,11 +165,17 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         self.import_button.clicked.connect(self.import_gpx_file)
+        self.delete_collection_button.clicked.connect(
+            self.delete_collection
+        )
         self.collection_list.currentItemChanged.connect(
             self.load_waypoints
         )
         self.waypoint_list.itemSelectionChanged.connect(
             self.update_waypoint_selection
+        )
+        self.delete_waypoints_button.clicked.connect(
+            self.delete_selected_waypoints
         )
         self.waypoint_sort_combo.currentIndexChanged.connect(
             self.reload_sorted_waypoints
@@ -199,6 +211,7 @@ class MainWindow(QMainWindow):
         del previous_item
         self.waypoint_list.clear()
         self.export_button.setEnabled(current_item is not None)
+        self.delete_collection_button.setEnabled(current_item is not None)
         if current_item is None:
             return
 
@@ -257,6 +270,7 @@ class MainWindow(QMainWindow):
 
     def update_waypoint_selection(self) -> None:
         selected_items = self.waypoint_list.selectedItems()
+        self.delete_waypoints_button.setEnabled(bool(selected_items))
         self.clear_waypoint_editor()
 
         if len(selected_items) == 1:
@@ -277,6 +291,96 @@ class MainWindow(QMainWindow):
             return
 
         self.set_bulk_fields_enabled(False)
+
+    def delete_selected_waypoints(self) -> None:
+        selected_items = self.waypoint_list.selectedItems()
+        if not selected_items:
+            return
+
+        count = len(selected_items)
+        answer = QMessageBox.question(
+            self,
+            "Delete waypoints",
+            f"Delete {count} selected waypoint(s)?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            for item in selected_items:
+                self.database.delete_waypoint(
+                    item.data(Qt.ItemDataRole.UserRole)
+                )
+        except sqlite3.Error as exc:
+            QMessageBox.critical(
+                self,
+                "Delete waypoints failed",
+                f"The waypoint(s) could not be deleted:\n{exc}",
+            )
+            return
+
+        collection_item = self.collection_list.currentItem()
+        if collection_item is not None:
+            self.load_waypoints(collection_item)
+        else:
+            self.waypoint_list.clear()
+        self.clear_waypoint_editor()
+        self.delete_waypoints_button.setEnabled(False)
+
+    def delete_collection(self) -> None:
+        current_item = self.collection_list.currentItem()
+        if current_item is None:
+            return
+
+        current_index = self.collection_list.currentRow()
+        collection_id = current_item.data(Qt.ItemDataRole.UserRole)
+        try:
+            waypoint_count = len(
+                self.database.list_waypoints(collection_id)
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Delete collection failed",
+                f"The collection could not be inspected:\n{exc}",
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Delete collection",
+            f'Delete collection "{current_item.text()}" and '
+            f"its {waypoint_count} waypoint(s)?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.database.delete_collection(collection_id)
+        except sqlite3.Error as exc:
+            QMessageBox.critical(
+                self,
+                "Delete collection failed",
+                f"The collection could not be deleted:\n{exc}",
+            )
+            return
+
+        self.load_collections()
+        if self.collection_list.count() > 0:
+            self.collection_list.setCurrentRow(
+                min(current_index, self.collection_list.count() - 1)
+            )
+        else:
+            self.waypoint_list.clear()
+            self.clear_waypoint_editor()
+            self.export_button.setEnabled(False)
+            self.delete_collection_button.setEnabled(False)
 
     def set_bulk_fields_enabled(self, bulk_mode: bool) -> None:
         for widget in (

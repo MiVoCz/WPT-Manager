@@ -69,6 +69,10 @@ def test_main_window_defaults(tmp_path):
     assert window.import_button.text() == "Import GPX"
     assert window.export_button.text() == "Export GPX"
     assert not window.export_button.isEnabled()
+    assert window.delete_collection_button.text() == "Delete Collection"
+    assert not window.delete_collection_button.isEnabled()
+    assert window.delete_waypoints_button.text() == "Delete Waypoint(s)"
+    assert not window.delete_waypoints_button.isEnabled()
     assert window.color_button.text() == "Choose color"
     assert window.save_button.text() == "Save"
     assert not window.save_button.isEnabled()
@@ -848,6 +852,286 @@ def test_import_button_shows_error_message(tmp_path, monkeypatch):
     assert messages == [
         "The GPX file could not be imported:\nInvalid GPX"
     ]
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_selected_waypoints_requires_confirmation(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    selected = [
+        Waypoint(name="Alpha", latitude=1.0, longitude=1.0),
+        Waypoint(name="Bravo", latitude=2.0, longitude=2.0),
+    ]
+    unselected = Waypoint(name="Charlie", latitude=3.0, longitude=3.0)
+    for waypoint in [*selected, unselected]:
+        database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.item(0).setSelected(True)
+    window.waypoint_list.item(1).setSelected(True)
+    questions = []
+    answers = [
+        QMessageBox.StandardButton.Cancel,
+        QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: (
+            questions.append(args[2]) or answers.pop(0)
+        ),
+    )
+
+    assert window.delete_waypoints_button.isEnabled()
+    window.delete_waypoints_button.click()
+    assert all(database.get_waypoint(waypoint.id) for waypoint in selected)
+
+    window.delete_waypoints_button.click()
+
+    assert questions == [
+        "Delete 2 selected waypoint(s)?",
+        "Delete 2 selected waypoint(s)?",
+    ]
+    assert all(
+        database.get_waypoint(waypoint.id) is None
+        for waypoint in selected
+    )
+    assert database.get_waypoint(unselected.id) == unselected
+    assert window.waypoint_list.count() == 1
+    assert window.name_edit.text() == ""
+    assert not window.save_button.isEnabled()
+    assert not window.delete_waypoints_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_collection_requires_confirmation_and_cascades(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoints = [
+        Waypoint(name="Alpha", latitude=1.0, longitude=1.0),
+        Waypoint(name="Bravo", latitude=2.0, longitude=2.0),
+    ]
+    for waypoint in waypoints:
+        database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    questions = []
+    answers = [
+        QMessageBox.StandardButton.Cancel,
+        QMessageBox.StandardButton.Yes,
+    ]
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: (
+            questions.append(args[2]) or answers.pop(0)
+        ),
+    )
+
+    assert window.delete_collection_button.isEnabled()
+    window.delete_collection_button.click()
+    assert database.get_collection(collection.id) == collection
+
+    window.delete_collection_button.click()
+
+    assert questions == [
+        'Delete collection "Places" and its 2 waypoint(s)?',
+        'Delete collection "Places" and its 2 waypoint(s)?',
+    ]
+    assert database.get_collection(collection.id) is None
+    assert all(
+        database.get_waypoint(waypoint.id) is None
+        for waypoint in waypoints
+    )
+    assert window.collection_list.count() == 0
+    assert window.waypoint_list.count() == 0
+    assert window.name_edit.text() == ""
+    assert not window.delete_collection_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_collection_in_middle_selects_collection_at_same_index(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collections = [
+        Collection(name="Alpha"),
+        Collection(name="Bravo"),
+        Collection(name="Charlie"),
+    ]
+    for collection in collections:
+        database.save_collection(collection)
+    waypoint = Waypoint(name="Charlie waypoint", latitude=1.0, longitude=1.0)
+    database.save_waypoint(waypoint, collections[2].id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(1)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.delete_collection_button.click()
+
+    assert [
+        window.collection_list.item(index).text()
+        for index in range(window.collection_list.count())
+    ] == ["Alpha", "Charlie"]
+    assert window.collection_list.currentRow() == 1
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == collections[2].id
+    assert window.waypoint_list.count() == 1
+    assert window.waypoint_list.item(0).data(
+        Qt.ItemDataRole.UserRole
+    ) == waypoint.id
+    assert window.delete_collection_button.isEnabled()
+    assert window.export_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_last_collection_selects_new_last_collection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    first = Collection(name="Alpha")
+    last = Collection(name="Bravo")
+    database.save_collection(first)
+    database.save_collection(last)
+    waypoint = Waypoint(name="Alpha waypoint", latitude=1.0, longitude=1.0)
+    database.save_waypoint(waypoint, first.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(1)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.delete_collection_button.click()
+
+    assert window.collection_list.count() == 1
+    assert window.collection_list.currentRow() == 0
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == first.id
+    assert window.waypoint_list.count() == 1
+    assert window.waypoint_list.item(0).data(
+        Qt.ItemDataRole.UserRole
+    ) == waypoint.id
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_only_collection_clears_selection_waypoints_and_editor(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Only")
+    database.save_collection(collection)
+    waypoint = Waypoint(name="Only waypoint", latitude=1.0, longitude=1.0)
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    assert window.name_edit.text() == waypoint.name
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    window.delete_collection_button.click()
+
+    assert window.collection_list.count() == 0
+    assert window.collection_list.currentItem() is None
+    assert window.waypoint_list.count() == 0
+    assert window.name_edit.text() == ""
+    assert not window.save_button.isEnabled()
+    assert not window.delete_collection_button.isEnabled()
+    assert not window.export_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_actions_handle_database_errors(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(name="Alpha", latitude=1.0, longitude=1.0)
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    errors = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[2]),
+    )
+    monkeypatch.setattr(
+        database,
+        "delete_waypoint",
+        lambda waypoint_id: (_ for _ in ()).throw(
+            sqlite3.OperationalError("Database is locked")
+        ),
+    )
+
+    window.delete_waypoints_button.click()
+
+    assert database.get_waypoint(waypoint.id) == waypoint
+    assert errors == [
+        "The waypoint(s) could not be deleted:\nDatabase is locked"
+    ]
+
+    monkeypatch.setattr(
+        database,
+        "delete_collection",
+        lambda collection_id: (_ for _ in ()).throw(
+            sqlite3.OperationalError("Database is locked")
+        ),
+    )
+    window.delete_collection_button.click()
+
+    assert database.get_collection(collection.id) == collection
+    assert errors[-1] == (
+        "The collection could not be deleted:\nDatabase is locked"
+    )
 
     window.close()
     application.processEvents()

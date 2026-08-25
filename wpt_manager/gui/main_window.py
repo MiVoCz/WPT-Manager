@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QFileDialog,
     QColorDialog,
@@ -30,13 +30,29 @@ from wpt_manager.gui.icon_picker_dialog import IconPickerDialog
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
+from wpt_manager.models.icon import IconInfo
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        icon_catalog: list[IconInfo] | None = None,
+    ) -> None:
         super().__init__()
         self.database = database
+        self.icon_catalog = (
+            load_icon_catalog()
+            if icon_catalog is None
+            else icon_catalog
+        )
+        self.icon_paths_by_name: dict[str, Path] = {}
+        for icon in self.icon_catalog:
+            self.icon_paths_by_name.setdefault(
+                icon.icon_name,
+                icon.svg_path,
+            )
         self.setWindowTitle("WPT-Manager")
         self.resize(1000, 700)
 
@@ -61,6 +77,9 @@ class MainWindow(QMainWindow):
 
         self.name_edit = QLineEdit()
         self.icon_edit = QLineEdit()
+        self.icon_preview = QLabel()
+        self.icon_preview.setFixedSize(32, 32)
+        self.icon_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_button = QPushButton("Select...")
         self.color_edit = QLineEdit()
         self.color_preview = QLabel()
@@ -86,6 +105,7 @@ class MainWindow(QMainWindow):
         icon_layout = QHBoxLayout(icon_editor)
         icon_layout.setContentsMargins(0, 0, 0, 0)
         icon_layout.addWidget(self.icon_edit)
+        icon_layout.addWidget(self.icon_preview)
         icon_layout.addWidget(self.icon_button)
         editor_form.addRow(QLabel("Icon"), icon_editor)
 
@@ -132,6 +152,7 @@ class MainWindow(QMainWindow):
         self.save_button.clicked.connect(self.save_waypoint)
         self.color_button.clicked.connect(self.choose_color)
         self.icon_button.clicked.connect(self.choose_icon)
+        self.icon_edit.textChanged.connect(self.update_icon_preview)
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -224,11 +245,26 @@ class MainWindow(QMainWindow):
         self.update_color_preview(color_value)
 
     def choose_icon(self) -> None:
-        dialog = IconPickerDialog(load_icon_catalog(), self)
+        dialog = IconPickerDialog(self.icon_catalog, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         if dialog.selected_icon_name is not None:
             self.icon_edit.setText(dialog.selected_icon_name)
+
+    def update_icon_preview(self, icon_name: str) -> None:
+        svg_path = self.icon_paths_by_name.get(icon_name)
+        if svg_path is None:
+            self.icon_preview.clear()
+            return
+
+        icon = QIcon(str(svg_path))
+        if icon.isNull():
+            self.icon_preview.clear()
+            return
+
+        self.icon_preview.setPixmap(
+            icon.pixmap(self.icon_preview.size())
+        )
 
     def save_waypoint(self) -> None:
         current_item = self.waypoint_list.currentItem()

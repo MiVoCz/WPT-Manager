@@ -23,6 +23,7 @@ from wpt_manager.database.database import Database
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.models.collection import Collection
+from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
 
 
@@ -45,6 +46,8 @@ def test_main_window_defaults(tmp_path):
 
     assert isinstance(window.name_edit, QLineEdit)
     assert isinstance(window.icon_edit, QLineEdit)
+    assert window.icon_preview.width() == 32
+    assert window.icon_preview.height() == 32
     assert window.icon_button.text() == "Select..."
     assert isinstance(window.color_edit, QLineEdit)
     assert window.color_preview.width() == 24
@@ -322,6 +325,10 @@ def test_icon_button_updates_icon_and_handles_cancel(
     tmp_path,
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.load_icon_catalog",
+        lambda: [],
+    )
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()
@@ -337,10 +344,6 @@ def test_icon_button_updates_icon_and_handles_cancel(
         def exec(self):
             return QDialog.DialogCode.Accepted
 
-    monkeypatch.setattr(
-        "wpt_manager.gui.main_window.load_icon_catalog",
-        lambda: [],
-    )
     monkeypatch.setattr(
         "wpt_manager.gui.main_window.IconPickerDialog",
         AcceptedIconDialog,
@@ -362,6 +365,79 @@ def test_icon_button_updates_icon_and_handles_cancel(
     window.icon_edit.setText("unknown_existing_icon")
     window.icon_button.click()
     assert window.icon_edit.text() == "unknown_existing_icon"
+
+    window.close()
+    application.processEvents()
+
+
+def test_icon_preview_uses_cached_catalog_and_updates_live(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    first_svg = tmp_path / "first.svg"
+    duplicate_svg = tmp_path / "duplicate.svg"
+    other_svg = tmp_path / "other.svg"
+    first_svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'width="32" height="16"><rect width="32" height="16" '
+        'fill="#ff0000"/></svg>',
+        encoding="utf-8",
+    )
+    duplicate_svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'width="16" height="32"><rect width="16" height="32" '
+        'fill="#0000ff"/></svg>',
+        encoding="utf-8",
+    )
+    other_svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        'width="24" height="24"><circle cx="12" cy="12" r="12" '
+        'fill="#00ff00"/></svg>',
+        encoding="utf-8",
+    )
+    catalog = [
+        IconInfo("Alpha", "shared", first_svg),
+        IconInfo("Beta", "shared", duplicate_svg),
+        IconInfo("Beta", "other", other_svg),
+    ]
+    window = MainWindow(database, icon_catalog=catalog)
+
+    assert window.icon_paths_by_name["shared"] == first_svg
+
+    window.icon_edit.setText("shared")
+    assert not window.icon_preview.pixmap().isNull()
+
+    window.icon_edit.setText("unknown_icon")
+    assert window.icon_edit.text() == "unknown_icon"
+    assert window.icon_preview.pixmap().isNull()
+
+    window.icon_edit.setText("other")
+    assert not window.icon_preview.pixmap().isNull()
+
+    class AcceptedIconDialog:
+        selected_icon_name = "shared"
+
+        def __init__(self, received_catalog, parent):
+            assert received_catalog is catalog
+            assert parent is window
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.IconPickerDialog",
+        AcceptedIconDialog,
+    )
+    window.icon_button.click()
+
+    assert window.icon_edit.text() == "shared"
+    assert not window.icon_preview.pixmap().isNull()
+
+    window.clear_waypoint_editor()
+    assert window.icon_preview.pixmap().isNull()
 
     window.close()
     application.processEvents()

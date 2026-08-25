@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QVBoxLayout,
@@ -24,6 +25,7 @@ class IconPickerDialog(QDialog):
         self.setWindowTitle("Select icon")
         self.resize(700, 450)
         self.selected_icon_name: str | None = None
+        self.catalog = catalog
 
         self.icons_by_group: dict[str, list[IconInfo]] = {}
         for icon in catalog:
@@ -31,6 +33,9 @@ class IconPickerDialog(QDialog):
 
         self.group_list = QListWidget()
         self.group_list.setMaximumWidth(200)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search")
 
         self.icon_list = QListWidget()
         self.icon_list.setViewMode(QListWidget.ViewMode.IconMode)
@@ -62,10 +67,12 @@ class IconPickerDialog(QDialog):
         self.select_button.setEnabled(False)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(self.search_edit)
         layout.addLayout(content_layout)
         layout.addWidget(self.button_box)
 
         self.group_list.currentItemChanged.connect(self.load_group)
+        self.search_edit.textChanged.connect(self.refresh_icons)
         self.icon_list.currentItemChanged.connect(
             self.update_select_button
         )
@@ -88,16 +95,42 @@ class IconPickerDialog(QDialog):
         current_item: QListWidgetItem | None,
         previous_item: QListWidgetItem | None = None,
     ) -> None:
+        del current_item
         del previous_item
+        self.refresh_icons()
+
+    def refresh_icons(self, search_text: str | None = None) -> None:
+        del search_text
         self.icon_list.clear()
-        if current_item is not None:
-            for icon in self.icons_by_group[current_item.text()]:
-                item = QListWidgetItem(
-                    QIcon(str(icon.svg_path)),
-                    icon.icon_name,
-                )
-                item.setData(Qt.ItemDataRole.UserRole, icon.icon_name)
-                self.icon_list.addItem(item)
+        query = self.search_edit.text().strip().casefold()
+
+        if query:
+            icons = [
+                icon
+                for icon in self.catalog
+                if query in icon.icon_name.casefold()
+            ]
+        else:
+            current_group = self.group_list.currentItem()
+            icons = (
+                self.icons_by_group[current_group.text()]
+                if current_group is not None
+                else []
+            )
+
+        for icon in icons:
+            label = (
+                f"{icon.icon_name}\n{icon.group}"
+                if query
+                else icon.icon_name
+            )
+            item = QListWidgetItem(
+                QIcon(str(icon.svg_path)),
+                label,
+            )
+            item.setData(Qt.ItemDataRole.UserRole, icon.icon_name)
+            item.setData(Qt.ItemDataRole.UserRole + 1, icon.group)
+            self.icon_list.addItem(item)
         self.update_empty_state()
 
     def update_empty_state(self) -> None:

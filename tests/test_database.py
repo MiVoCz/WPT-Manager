@@ -301,6 +301,32 @@ def test_update_missing_waypoint_fails(tmp_path):
         database.update_waypoint(waypoint)
 
 
+def test_update_waypoints_is_atomic(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    existing = Waypoint(
+        name="Original",
+        latitude=1.0,
+        longitude=2.0,
+    )
+    database.save_waypoint(existing, collection.id)
+    existing.name = "Changed"
+    missing = Waypoint(
+        name="Missing",
+        latitude=3.0,
+        longitude=4.0,
+    )
+
+    with pytest.raises(ValueError, match="Waypoint does not exist"):
+        database.update_waypoints([existing, missing])
+
+    loaded = database.get_waypoint(existing.id)
+    assert loaded is not None
+    assert loaded.name == "Original"
+
+
 def test_delete_waypoint(tmp_path):
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()

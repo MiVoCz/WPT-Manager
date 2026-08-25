@@ -8,6 +8,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QColorDialog,
     QComboBox,
@@ -72,6 +73,9 @@ def test_main_window_defaults(tmp_path):
     assert window.save_button.text() == "Save"
     assert not window.save_button.isEnabled()
     assert window.collection_list.count() == 0
+    assert window.waypoint_list.selectionMode() == (
+        QAbstractItemView.SelectionMode.ExtendedSelection
+    )
 
     window.close()
     application.processEvents()
@@ -222,6 +226,182 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     assert window.note_edit.text() == ""
     assert window.comment_edit.toPlainText() == ""
     assert not window.save_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_multiple_waypoint_selection_enables_bulk_editor(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    other_collection = Collection(name="Prázdná")
+    database.save_collection(collection)
+    database.save_collection(other_collection)
+    first = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+    )
+    second = Waypoint(
+        name="Gorges du Toulourenc",
+        latitude=44.216738,
+        longitude=5.224684,
+    )
+    database.save_waypoint(first, collection.id)
+    database.save_waypoint(second, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+
+    first_item = window.waypoint_list.item(0)
+    second_item = window.waypoint_list.item(1)
+    first_item.setSelected(True)
+    second_item.setSelected(True)
+
+    assert {
+        item.data(Qt.ItemDataRole.UserRole)
+        for item in window.waypoint_list.selectedItems()
+    } == {first.id, second.id}
+    assert window.editor_panel.isEnabled()
+    assert window.save_button.isEnabled()
+    assert not window.name_edit.isEnabled()
+    assert window.icon_edit.isEnabled()
+    assert window.color_edit.isEnabled()
+    assert window.background_combo.isEnabled()
+    assert not window.latitude_edit.isEnabled()
+    assert not window.longitude_edit.isEnabled()
+    assert not window.note_edit.isEnabled()
+    assert not window.comment_edit.isEnabled()
+    assert not window.waypoint_selection_label.isHidden()
+    assert window.waypoint_selection_label.text() == "Selected waypoints: 2"
+
+    second_item.setSelected(False)
+
+    assert window.editor_panel.isEnabled()
+    assert window.save_button.isEnabled()
+    assert window.name_edit.text() == first.name
+    assert window.waypoint_selection_label.isHidden()
+
+    window.waypoint_list.clearSelection()
+
+    assert window.editor_panel.isEnabled()
+    assert window.name_edit.text() == ""
+    assert not window.save_button.isEnabled()
+
+    first_item.setSelected(True)
+    second_item.setSelected(True)
+    window.collection_list.setCurrentRow(1)
+
+    assert window.waypoint_list.count() == 0
+    assert window.editor_panel.isEnabled()
+    assert window.name_edit.text() == ""
+    assert not window.save_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_bulk_edit_updates_only_explicit_fields(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    first = Waypoint(
+        name="First",
+        latitude=1.0,
+        longitude=2.0,
+        icon="first-icon",
+        color="#FF0000",
+        background="circle",
+        note="First note",
+        comment="First comment",
+    )
+    second = Waypoint(
+        name="Second",
+        latitude=3.0,
+        longitude=4.0,
+        icon="second-icon",
+        color="#00FF00",
+        background="square",
+        note="Second note",
+        comment="Second comment",
+    )
+    unselected = Waypoint(
+        name="Unselected",
+        latitude=5.0,
+        longitude=6.0,
+        icon="unchanged-icon",
+        color="#0000FF",
+        background="octagon",
+        note="Unselected note",
+        comment="Unselected comment",
+    )
+    for waypoint in (first, second, unselected):
+        database.save_waypoint(waypoint, collection.id)
+
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: messages.append(args[2]),
+    )
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.item(0).setSelected(True)
+    window.waypoint_list.item(1).setSelected(True)
+
+    assert window.icon_edit.text() == ""
+    assert window.color_edit.text() == ""
+    assert window.background_combo.currentIndex() == -1
+    assert window.bulk_changed_fields == set()
+
+    window.icon_edit.setText("shared-icon")
+    window.mark_bulk_field_changed("icon")
+    window.save_button.click()
+
+    loaded_first = database.get_waypoint(first.id)
+    loaded_second = database.get_waypoint(second.id)
+    assert loaded_first is not None
+    assert loaded_second is not None
+    assert loaded_first.icon == loaded_second.icon == "shared-icon"
+    assert loaded_first.color == first.color
+    assert loaded_second.color == second.color
+    assert loaded_first.background == first.background
+    assert loaded_second.background == second.background
+
+    window.color_edit.setText("#123456")
+    window.mark_bulk_field_changed("color")
+    window.save_button.click()
+    window.background_combo.setCurrentText("octagon")
+    window.save_button.click()
+
+    loaded_first = database.get_waypoint(first.id)
+    loaded_second = database.get_waypoint(second.id)
+    loaded_unselected = database.get_waypoint(unselected.id)
+    assert loaded_first is not None
+    assert loaded_second is not None
+    assert loaded_unselected == unselected
+    assert loaded_first.color == loaded_second.color == "#123456"
+    assert loaded_first.background == loaded_second.background == "octagon"
+    assert loaded_first.name == first.name
+    assert loaded_second.name == second.name
+    assert loaded_first.latitude == first.latitude
+    assert loaded_second.longitude == second.longitude
+    assert loaded_first.note == first.note
+    assert loaded_second.note == second.note
+    assert loaded_first.comment == first.comment
+    assert loaded_second.comment == second.comment
+    assert {
+        item.data(Qt.ItemDataRole.UserRole)
+        for item in window.waypoint_list.selectedItems()
+    } == {first.id, second.id}
+    assert messages == [
+        "Updated 2 waypoints.",
+        "Updated 2 waypoints.",
+        "Updated 2 waypoints.",
+    ]
 
     window.close()
     application.processEvents()

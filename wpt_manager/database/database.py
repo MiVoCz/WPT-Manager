@@ -279,7 +279,29 @@ class Database:
     def update_waypoint(self, waypoint: Waypoint) -> None:
         connection = self._connect()
         try:
-            cursor = connection.execute(
+            self._update_waypoint(connection, waypoint)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def update_waypoints(self, waypoints: list[Waypoint]) -> None:
+        connection = self._connect()
+        try:
+            for waypoint in waypoints:
+                self._update_waypoint(connection, waypoint)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _update_waypoint(
+        connection: sqlite3.Connection,
+        waypoint: Waypoint,
+    ) -> None:
+        cursor = connection.execute(
                 """
                 UPDATE waypoints
                 SET name = ?,
@@ -304,13 +326,10 @@ class Database:
                     str(waypoint.id),
                 ),
             )
-            if cursor.rowcount == 0:
-                raise ValueError(
-                    f"Waypoint does not exist: {waypoint.id}"
-                )
-            connection.commit()
-        finally:
-            connection.close()
+        if cursor.rowcount == 0:
+            raise ValueError(
+                f"Waypoint does not exist: {waypoint.id}"
+            )
 
     def delete_waypoint(self, waypoint_id: UUID) -> None:
         connection = self._connect()

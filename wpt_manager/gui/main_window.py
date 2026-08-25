@@ -1,9 +1,10 @@
 import sqlite3
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QColorDialog,
     QComboBox,
@@ -32,6 +33,7 @@ from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
 from wpt_manager.models.icon import IconInfo
+from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 
@@ -72,6 +74,9 @@ class MainWindow(QMainWindow):
         collection_layout.addLayout(collection_buttons)
 
         self.waypoint_list = QListWidget()
+        self.waypoint_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
 
         waypoint_panel = QGroupBox("Waypoints")
         waypoint_layout = QVBoxLayout(waypoint_panel)
@@ -97,9 +102,14 @@ class MainWindow(QMainWindow):
         self.comment_edit = QTextEdit()
         self.save_button = QPushButton("Save")
         self.save_button.setEnabled(False)
+        self.waypoint_selection_label = QLabel()
+        self.waypoint_selection_label.setVisible(False)
+        self.bulk_edit_mode = False
+        self.bulk_changed_fields: set[str] = set()
 
-        editor_panel = QGroupBox("Waypoint editor")
-        editor_layout = QVBoxLayout(editor_panel)
+        self.editor_panel = QGroupBox("Waypoint editor")
+        editor_layout = QVBoxLayout(self.editor_panel)
+        editor_layout.addWidget(self.waypoint_selection_label)
         editor_form = QFormLayout()
         editor_form.addRow(QLabel("Name"), self.name_edit)
 
@@ -128,7 +138,7 @@ class MainWindow(QMainWindow):
 
         self.right_splitter = QSplitter(Qt.Orientation.Vertical)
         self.right_splitter.addWidget(waypoint_panel)
-        self.right_splitter.addWidget(editor_panel)
+        self.right_splitter.addWidget(self.editor_panel)
         self.right_splitter.setStretchFactor(0, 2)
         self.right_splitter.setStretchFactor(1, 3)
 
@@ -148,14 +158,23 @@ class MainWindow(QMainWindow):
         self.collection_list.currentItemChanged.connect(
             self.load_waypoints
         )
-        self.waypoint_list.currentItemChanged.connect(
-            self.load_waypoint
+        self.waypoint_list.itemSelectionChanged.connect(
+            self.update_waypoint_selection
         )
         self.save_button.clicked.connect(self.save_waypoint)
         self.export_button.clicked.connect(self.export_gpx_file)
         self.color_button.clicked.connect(self.choose_color)
         self.icon_button.clicked.connect(self.choose_icon)
         self.icon_edit.textChanged.connect(self.update_icon_preview)
+        self.icon_edit.textEdited.connect(
+            lambda: self.mark_bulk_field_changed("icon")
+        )
+        self.color_edit.textEdited.connect(
+            lambda: self.mark_bulk_field_changed("color")
+        )
+        self.background_combo.currentIndexChanged.connect(
+            lambda: self.mark_bulk_field_changed("background")
+        )
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -208,10 +227,101 @@ class MainWindow(QMainWindow):
         self.comment_edit.setPlainText(waypoint.comment)
         self.save_button.setEnabled(True)
 
+    def update_waypoint_selection(self) -> None:
+        selected_items = self.waypoint_list.selectedItems()
+        self.clear_waypoint_editor()
+
+        if len(selected_items) == 1:
+            self.editor_panel.setEnabled(True)
+            self.set_bulk_fields_enabled(False)
+            self.load_waypoint(selected_items[0])
+            return
+
+        if len(selected_items) > 1:
+            self.bulk_edit_mode = True
+            self.waypoint_selection_label.setText(
+                f"Selected waypoints: {len(selected_items)}"
+            )
+            self.waypoint_selection_label.setVisible(True)
+            self.set_bulk_fields_enabled(True)
+            self.load_bulk_values(selected_items)
+            self.save_button.setEnabled(True)
+            return
+
+        self.set_bulk_fields_enabled(False)
+
+    def set_bulk_fields_enabled(self, bulk_mode: bool) -> None:
+        for widget in (
+            self.name_edit,
+            self.latitude_edit,
+            self.longitude_edit,
+            self.note_edit,
+            self.comment_edit,
+        ):
+            widget.setEnabled(not bulk_mode)
+        for widget in (
+            self.icon_edit,
+            self.icon_preview,
+            self.icon_button,
+            self.color_edit,
+            self.color_preview,
+            self.color_button,
+            self.background_combo,
+        ):
+            widget.setEnabled(True)
+
+    def load_bulk_values(
+        self,
+        selected_items: list[QListWidgetItem],
+    ) -> None:
+        waypoints = [
+            waypoint
+            for item in selected_items
+            if (waypoint := self.database.get_waypoint(
+                item.data(Qt.ItemDataRole.UserRole)
+            )) is not None
+        ]
+        if not waypoints:
+            self.save_button.setEnabled(False)
+            return
+
+        blockers = [
+            QSignalBlocker(self.icon_edit),
+            QSignalBlocker(self.color_edit),
+            QSignalBlocker(self.background_combo),
+        ]
+        self.icon_edit.setText(self.common_value(waypoints, "icon"))
+        self.icon_edit.setPlaceholderText("(mixed)")
+        self.color_edit.setText(self.common_value(waypoints, "color"))
+        self.color_edit.setPlaceholderText("(mixed)")
+        background = self.common_value(waypoints, "background")
+        self.background_combo.setCurrentText(background)
+        if not background:
+            self.background_combo.setCurrentIndex(-1)
+        del blockers
+        self.update_icon_preview(self.icon_edit.text())
+        self.update_color_preview(self.color_edit.text())
+        self.bulk_changed_fields.clear()
+
+    @staticmethod
+    def common_value(waypoints: list[Waypoint], field: str) -> str:
+        values = {getattr(waypoint, field) for waypoint in waypoints}
+        return values.pop() if len(values) == 1 else ""
+
+    def mark_bulk_field_changed(self, field: str) -> None:
+        if self.bulk_edit_mode:
+            self.bulk_changed_fields.add(field)
+
     def clear_waypoint_editor(self) -> None:
+        self.bulk_edit_mode = False
+        self.bulk_changed_fields.clear()
+        self.waypoint_selection_label.clear()
+        self.waypoint_selection_label.setVisible(False)
         self.name_edit.clear()
         self.icon_edit.clear()
+        self.icon_edit.setPlaceholderText("")
         self.color_edit.clear()
+        self.color_edit.setPlaceholderText("")
         self.update_color_preview("")
         self.background_combo.setCurrentIndex(-1)
         self.latitude_edit.clear()
@@ -247,6 +357,7 @@ class MainWindow(QMainWindow):
         ).upper()
         self.color_edit.setText(color_value)
         self.update_color_preview(color_value)
+        self.mark_bulk_field_changed("color")
 
     def choose_icon(self) -> None:
         dialog = IconPickerDialog(self.icon_catalog, self)
@@ -254,6 +365,7 @@ class MainWindow(QMainWindow):
             return
         if dialog.selected_icon_name is not None:
             self.icon_edit.setText(dialog.selected_icon_name)
+            self.mark_bulk_field_changed("icon")
 
     def update_icon_preview(self, icon_name: str) -> None:
         svg_path = self.icon_paths_by_name.get(icon_name)
@@ -271,9 +383,13 @@ class MainWindow(QMainWindow):
         )
 
     def save_waypoint(self) -> None:
-        current_item = self.waypoint_list.currentItem()
-        if current_item is None:
+        selected_items = self.waypoint_list.selectedItems()
+        if len(selected_items) > 1:
+            self.save_bulk_waypoints(selected_items)
             return
+        if len(selected_items) != 1:
+            return
+        current_item = selected_items[0]
 
         waypoint_id = current_item.data(Qt.ItemDataRole.UserRole)
         waypoint = self.database.get_waypoint(waypoint_id)
@@ -322,6 +438,75 @@ class MainWindow(QMainWindow):
             self,
             "Save waypoint",
             f'Waypoint "{waypoint.name}" was saved.',
+        )
+
+    def save_bulk_waypoints(
+        self,
+        selected_items: list[QListWidgetItem],
+    ) -> None:
+        if not self.bulk_changed_fields:
+            return
+
+        if "color" in self.bulk_changed_fields:
+            color = QColor(self.color_edit.text())
+            if not color.isValid():
+                QMessageBox.warning(
+                    self,
+                    "Invalid waypoint",
+                    "Waypoint color must be a valid Qt color or HEX value.",
+                )
+                return
+            color_value = color.name(QColor.NameFormat.HexRgb).upper()
+        else:
+            color_value = ""
+
+        selected_ids = [
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in selected_items
+        ]
+        waypoints = []
+        for waypoint_id in selected_ids:
+            waypoint = self.database.get_waypoint(waypoint_id)
+            if waypoint is None:
+                QMessageBox.critical(
+                    self,
+                    "Bulk update failed",
+                    f"Waypoint does not exist: {waypoint_id}",
+                )
+                return
+            if "icon" in self.bulk_changed_fields:
+                waypoint.icon = self.icon_edit.text()
+            if "color" in self.bulk_changed_fields:
+                waypoint.color = color_value
+            if "background" in self.bulk_changed_fields:
+                waypoint.background = self.background_combo.currentText()
+            waypoints.append(waypoint)
+
+        try:
+            self.database.update_waypoints(waypoints)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Bulk update failed",
+                f"The waypoints could not be updated:\n{exc}",
+            )
+            return
+
+        collection_item = self.collection_list.currentItem()
+        if collection_item is not None:
+            self.load_waypoints(collection_item)
+            self.waypoint_list.blockSignals(True)
+            for index in range(self.waypoint_list.count()):
+                item = self.waypoint_list.item(index)
+                if item.data(Qt.ItemDataRole.UserRole) in selected_ids:
+                    item.setSelected(True)
+            self.waypoint_list.blockSignals(False)
+            self.update_waypoint_selection()
+
+        QMessageBox.information(
+            self,
+            "Bulk update",
+            f"Updated {len(waypoints)} waypoints.",
         )
 
     def import_gpx_file(self) -> None:

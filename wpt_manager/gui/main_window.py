@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from wpt_manager.database.database import Database
 from wpt_manager.gui.icon_picker_dialog import IconPickerDialog
 from wpt_manager.io.exceptions import GpxReaderError
+from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
 from wpt_manager.models.icon import IconInfo
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self.collection_list = QListWidget()
         self.import_button = QPushButton("Import GPX")
         self.export_button = QPushButton("Export GPX")
+        self.export_button.setEnabled(False)
 
         collection_panel = QGroupBox("Collections")
         collection_layout = QVBoxLayout(collection_panel)
@@ -150,6 +152,7 @@ class MainWindow(QMainWindow):
             self.load_waypoint
         )
         self.save_button.clicked.connect(self.save_waypoint)
+        self.export_button.clicked.connect(self.export_gpx_file)
         self.color_button.clicked.connect(self.choose_color)
         self.icon_button.clicked.connect(self.choose_icon)
         self.icon_edit.textChanged.connect(self.update_icon_preview)
@@ -169,6 +172,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         del previous_item
         self.waypoint_list.clear()
+        self.export_button.setEnabled(current_item is not None)
         if current_item is None:
             return
 
@@ -359,4 +363,43 @@ class MainWindow(QMainWindow):
             self,
             "Import GPX",
             f'Collection "{collection.name}" was imported.',
+        )
+
+    def export_gpx_file(self) -> None:
+        current_item = self.collection_list.currentItem()
+        if current_item is None:
+            return
+
+        collection_id = current_item.data(Qt.ItemDataRole.UserRole)
+        selected_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export GPX",
+            f"{current_item.text()}.gpx",
+            "GPX files (*.gpx)",
+        )
+        if not selected_path:
+            return
+
+        output_path = Path(selected_path)
+        if output_path.suffix.lower() != ".gpx":
+            output_path = Path(f"{selected_path}.gpx")
+
+        try:
+            export_collection_gpx(
+                self.database,
+                collection_id,
+                output_path,
+            )
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Export GPX failed",
+                f"The collection could not be exported:\n{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Export GPX",
+            f'Collection "{current_item.text()}" was exported.',
         )

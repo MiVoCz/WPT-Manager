@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from wpt_manager.database.database import Database
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.io.exceptions import GpxReaderError
+from wpt_manager.io.gpx_reader import load_gpx
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
@@ -66,6 +67,7 @@ def test_main_window_defaults(tmp_path):
 
     assert window.import_button.text() == "Import GPX"
     assert window.export_button.text() == "Export GPX"
+    assert not window.export_button.isEnabled()
     assert window.color_button.text() == "Choose color"
     assert window.save_button.text() == "Save"
     assert not window.save_button.isEnabled()
@@ -127,6 +129,7 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     assert window.waypoint_list.count() == 0
 
     window.collection_list.setCurrentRow(0)
+    assert window.export_button.isEnabled()
     assert window.waypoint_list.count() == 1
     assert window.waypoint_list.item(0).text() == "Pont du Gard"
     assert window.waypoint_list.item(0).data(
@@ -145,6 +148,7 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
 
     window.collection_list.setCurrentRow(-1)
     assert window.waypoint_list.count() == 0
+    assert not window.export_button.isEnabled()
 
     window.close()
     application.processEvents()
@@ -607,6 +611,122 @@ def test_import_button_shows_error_message(tmp_path, monkeypatch):
     assert window.collection_list.count() == 0
     assert messages == [
         "The GPX file could not be imported:\nInvalid GPX"
+    ]
+
+    window.close()
+    application.processEvents()
+
+
+def test_export_button_exports_selected_collection(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    other_collection = Collection(name="Itálie")
+    database.save_collection(collection)
+    database.save_collection(other_collection)
+    waypoint = Waypoint(
+        name="Pont du Gard",
+        latitude=43.947070,
+        longitude=4.535600,
+        icon="historic_archaeological_site",
+        color="#FF8000",
+        background="square",
+        note="Zastavit na focení",
+        comment="Velmi pěkné místo pro delší zastávku.",
+    )
+    other_waypoint = Waypoint(
+        name="Koloseum",
+        latitude=41.890210,
+        longitude=12.492231,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    database.save_waypoint(other_waypoint, other_collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    output_without_suffix = tmp_path / "export"
+    dialog_arguments = []
+    messages = []
+
+    def select_output_file(*args, **kwargs):
+        dialog_arguments.append(args)
+        return str(output_without_suffix), "GPX files (*.gpx)"
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        select_output_file,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: messages.append(args[2]),
+    )
+
+    window.export_button.click()
+
+    output_file = tmp_path / "export.gpx"
+    assert output_file.exists()
+    assert dialog_arguments[0][2] == "Francie.gpx"
+    assert dialog_arguments[0][3] == "GPX files (*.gpx)"
+    exported_waypoints = load_gpx(output_file)
+    assert len(exported_waypoints) == 1
+    exported = exported_waypoints[0]
+    assert exported.name == waypoint.name
+    assert exported.latitude == waypoint.latitude
+    assert exported.longitude == waypoint.longitude
+    assert exported.note == waypoint.note
+    assert exported.comment == waypoint.comment
+    assert exported.icon == waypoint.icon
+    assert exported.background == waypoint.background
+    assert exported.color == waypoint.color
+    assert messages == ['Collection "Francie" was exported.']
+
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: ("", ""),
+    )
+    window.export_button.click()
+    assert messages == ['Collection "Francie" was exported.']
+
+    window.close()
+    application.processEvents()
+
+
+def test_export_button_handles_error(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Francie")
+    database.save_collection(collection)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    messages = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (
+            str(tmp_path / "francie.gpx"),
+            "GPX files (*.gpx)",
+        ),
+    )
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.export_collection_gpx",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("Access denied")
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: messages.append(args[2]),
+    )
+
+    window.export_button.click()
+
+    assert messages == [
+        "The collection could not be exported:\nAccess denied"
     ]
 
     window.close()

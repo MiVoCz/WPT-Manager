@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
     QComboBox,
+    QDialog,
     QFileDialog,
     QInputDialog,
     QLineEdit,
@@ -44,6 +45,7 @@ def test_main_window_defaults(tmp_path):
 
     assert isinstance(window.name_edit, QLineEdit)
     assert isinstance(window.icon_edit, QLineEdit)
+    assert window.icon_button.text() == "Select..."
     assert isinstance(window.color_edit, QLineEdit)
     assert window.color_preview.width() == 24
     assert window.color_preview.height() == 24
@@ -311,6 +313,55 @@ def test_color_button_updates_color_and_handles_cancel(
     assert window.color_preview.palette().color(
         QPalette.ColorRole.Window
     ).name().upper() == "#123456"
+
+    window.close()
+    application.processEvents()
+
+
+def test_icon_button_updates_icon_and_handles_cancel(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    window = MainWindow(database)
+
+    class AcceptedIconDialog:
+        selected_icon_name = "amenity_fuel"
+
+        def __init__(self, catalog, parent):
+            assert catalog == []
+            assert parent is window
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.load_icon_catalog",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.IconPickerDialog",
+        AcceptedIconDialog,
+    )
+
+    window.icon_edit.setText("unknown_existing_icon")
+    window.icon_button.click()
+    assert window.icon_edit.text() == "amenity_fuel"
+
+    class RejectedIconDialog(AcceptedIconDialog):
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.IconPickerDialog",
+        RejectedIconDialog,
+    )
+
+    window.icon_edit.setText("unknown_existing_icon")
+    window.icon_button.click()
+    assert window.icon_edit.text() == "unknown_existing_icon"
 
     window.close()
     application.processEvents()

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QColorDialog,
     QComboBox,
+    QDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,8 +26,10 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.database import Database
+from wpt_manager.gui.icon_picker_dialog import IconPickerDialog
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_importer import import_gpx
+from wpt_manager.io.icon_catalog import load_icon_catalog
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 
@@ -58,6 +61,7 @@ class MainWindow(QMainWindow):
 
         self.name_edit = QLineEdit()
         self.icon_edit = QLineEdit()
+        self.icon_button = QPushButton("Select...")
         self.color_edit = QLineEdit()
         self.color_preview = QLabel()
         self.color_preview.setFixedSize(24, 24)
@@ -77,7 +81,13 @@ class MainWindow(QMainWindow):
         editor_layout = QVBoxLayout(editor_panel)
         editor_form = QFormLayout()
         editor_form.addRow(QLabel("Name"), self.name_edit)
-        editor_form.addRow(QLabel("Icon"), self.icon_edit)
+
+        icon_editor = QWidget()
+        icon_layout = QHBoxLayout(icon_editor)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.addWidget(self.icon_edit)
+        icon_layout.addWidget(self.icon_button)
+        editor_form.addRow(QLabel("Icon"), icon_editor)
 
         color_editor = QWidget()
         color_layout = QHBoxLayout(color_editor)
@@ -121,6 +131,7 @@ class MainWindow(QMainWindow):
         )
         self.save_button.clicked.connect(self.save_waypoint)
         self.color_button.clicked.connect(self.choose_color)
+        self.icon_button.clicked.connect(self.choose_icon)
         self.load_collections()
 
     def load_collections(self) -> None:
@@ -211,6 +222,13 @@ class MainWindow(QMainWindow):
         ).upper()
         self.color_edit.setText(color_value)
         self.update_color_preview(color_value)
+
+    def choose_icon(self) -> None:
+        dialog = IconPickerDialog(load_icon_catalog(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.selected_icon_name is not None:
+            self.icon_edit.setText(dialog.selected_icon_name)
 
     def save_waypoint(self) -> None:
         current_item = self.waypoint_list.currentItem()

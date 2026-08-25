@@ -27,7 +27,9 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.database import Database
+from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
 from wpt_manager.gui.icon_picker_dialog import IconPickerDialog
+from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.gpx_importer import import_gpx
@@ -44,6 +46,7 @@ class MainWindow(QMainWindow):
         icon_catalog: list[IconInfo] | None = None,
     ) -> None:
         super().__init__()
+        install_native_title_bar_theming()
         self.database = database
         self.icon_catalog = (
             load_icon_catalog()
@@ -65,6 +68,8 @@ class MainWindow(QMainWindow):
         self.export_button.setEnabled(False)
         self.delete_collection_button = QPushButton("Delete Collection")
         self.delete_collection_button.setEnabled(False)
+        self.merge_collections_button = QPushButton("Merge Collections...")
+        self.merge_collections_button.setEnabled(False)
 
         collection_panel = QGroupBox("Collections")
         collection_layout = QVBoxLayout(collection_panel)
@@ -75,6 +80,7 @@ class MainWindow(QMainWindow):
         collection_buttons.addWidget(self.export_button)
         collection_buttons.addWidget(self.delete_collection_button)
         collection_layout.addLayout(collection_buttons)
+        collection_layout.addWidget(self.merge_collections_button)
 
         self.waypoint_list = QListWidget()
         self.waypoint_list.setSelectionMode(
@@ -168,6 +174,9 @@ class MainWindow(QMainWindow):
         self.delete_collection_button.clicked.connect(
             self.delete_collection
         )
+        self.merge_collections_button.clicked.connect(
+            self.open_merge_dialog
+        )
         self.collection_list.currentItemChanged.connect(
             self.load_waypoints
         )
@@ -202,6 +211,34 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(collection.name)
             item.setData(Qt.ItemDataRole.UserRole, collection.id)
             self.collection_list.addItem(item)
+        self.merge_collections_button.setEnabled(
+            self.collection_list.count() >= 2
+        )
+
+    def open_merge_dialog(self) -> None:
+        current_item = self.collection_list.currentItem()
+        selected_target_id = (
+            current_item.data(Qt.ItemDataRole.UserRole)
+            if current_item is not None
+            else None
+        )
+        dialog = CollectionMergeDialog(
+            self.database,
+            selected_target_id,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.merged_target_id is None:
+            return
+
+        target_id = dialog.merged_target_id
+        self.load_collections()
+        for index in range(self.collection_list.count()):
+            item = self.collection_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == target_id:
+                self.collection_list.setCurrentRow(index)
+                break
 
     def load_waypoints(
         self,

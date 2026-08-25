@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.models.icon import IconInfo
+from wpt_manager.gui.theme import install_native_title_bar_theming
 
 
 class IconPickerDialog(QDialog):
@@ -22,6 +23,7 @@ class IconPickerDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        install_native_title_bar_theming()
         self.setWindowTitle("Select icon")
         self.resize(700, 450)
         self.selected_icon_name: str | None = None

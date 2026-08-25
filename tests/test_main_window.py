@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.database import Database
+from wpt_manager.database.collection_merge import merge_collections
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_reader import load_gpx
@@ -71,6 +72,8 @@ def test_main_window_defaults(tmp_path):
     assert not window.export_button.isEnabled()
     assert window.delete_collection_button.text() == "Delete Collection"
     assert not window.delete_collection_button.isEnabled()
+    assert window.merge_collections_button.text() == "Merge Collections..."
+    assert not window.merge_collections_button.isEnabled()
     assert window.delete_waypoints_button.text() == "Delete Waypoint(s)"
     assert not window.delete_waypoints_button.isEnabled()
     assert window.color_button.text() == "Choose color"
@@ -110,6 +113,57 @@ def test_main_window_loads_collections_with_uuid(tmp_path):
     assert window.collection_list.item(1).data(
         Qt.ItemDataRole.UserRole
     ) == second.id
+    assert window.merge_collections_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+def test_successful_merge_reloads_and_selects_target_collection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source = Collection(name="Alpha source")
+    target = Collection(name="Bravo target")
+    database.save_collection(source)
+    database.save_collection(target)
+    source_waypoint = Waypoint(name="Zulu", latitude=50.0, longitude=14.0)
+    target_waypoint = Waypoint(name="Alpha", latitude=51.0, longitude=14.0)
+    database.save_waypoint(source_waypoint, source.id)
+    database.save_waypoint(target_waypoint, target.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(1)
+    window.waypoint_sort_combo.setCurrentIndex(1)
+
+    class SuccessfulMergeDialog:
+        def __init__(self, dialog_database, selected_target_id, parent):
+            assert selected_target_id == target.id
+            self.merged_target_id = target.id
+            self.database = dialog_database
+
+        def exec(self):
+            merge_collections(self.database, source.id, target.id, {})
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.CollectionMergeDialog",
+        SuccessfulMergeDialog,
+    )
+
+    window.merge_collections_button.click()
+
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == target.id
+    assert window.waypoint_sort_combo.currentData() == "created_at"
+    assert window.waypoint_list.count() == 2
+    assert {
+        window.waypoint_list.item(index).text()
+        for index in range(window.waypoint_list.count())
+    } == {"Alpha", "Zulu"}
 
     window.close()
     application.processEvents()

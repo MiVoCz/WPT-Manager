@@ -172,3 +172,39 @@ def test_invalid_gpx_cannot_modify_existing_collection(tmp_path):
     assert database.list_collections() == [target]
     assert database.list_waypoints(target.id) == [existing]
     application.processEvents()
+
+
+def test_changed_import_target_requires_new_analysis(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    target = Collection(name="Existing")
+    database.save_collection(target)
+    dialog = GpxImportDialog(database, TEST_DATA, target.id)
+    dialog.merge_radio.setChecked(True)
+    dialog.analyze_button.click()
+    changed_target = Waypoint(
+        name="Changed target",
+        latitude=48.0,
+        longitude=14.0,
+    )
+    database.save_waypoint(changed_target, target.id)
+    errors = []
+    monkeypatch.setattr(dialog, "_confirm_import", lambda: True)
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[2]),
+    )
+
+    dialog.import_button.click()
+
+    assert dialog.plan is None
+    assert not dialog.import_button.isEnabled()
+    assert errors == [
+        "Collection changed since analysis. Please analyze again."
+    ]
+    assert database.list_waypoints(target.id) == [changed_target]
+
+    dialog.close()
+    application.processEvents()

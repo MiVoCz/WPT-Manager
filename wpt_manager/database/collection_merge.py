@@ -18,6 +18,10 @@ from wpt_manager.validation.waypoint_duplicates import (
 )
 
 
+class MergePlanChangedError(RuntimeError):
+    """Raised when Collections changed after merge analysis."""
+
+
 def prepare_collection_merge(
     database: Database,
     source_collection_id: UUID,
@@ -43,6 +47,7 @@ def merge_collections(
     target_collection_id: UUID,
     conflict_decisions: Mapping[UUID, ConflictDecision],
     duplicate_threshold_m: float = DEFAULT_DUPLICATE_THRESHOLD_M,
+    analyzed_plan: MergePlan | None = None,
 ) -> MergeResult:
     """Atomically merge source waypoints into the target collection."""
     connection = database._connect()
@@ -54,6 +59,7 @@ def merge_collections(
             target_collection_id,
             duplicate_threshold_m,
         )
+        _ensure_plan_unchanged(analyzed_plan, plan)
         result = _execute_waypoint_merge(
             connection,
             plan,
@@ -103,6 +109,8 @@ def _prepare_merge(
         new_waypoints=waypoint_plan.new_waypoints,
         conflicts=waypoint_plan.conflicts,
         duplicate_threshold_m=waypoint_plan.duplicate_threshold_m,
+        source_state=waypoint_plan.source_state,
+        target_state=waypoint_plan.target_state,
     )
 
 
@@ -162,6 +170,8 @@ def prepare_waypoint_merge(
         new_waypoints=tuple(remaining_sources),
         conflicts=tuple(conflicts),
         duplicate_threshold_m=duplicate_threshold_m,
+        source_state=_waypoint_state(source_waypoints),
+        target_state=_waypoint_state(target_waypoints),
     )
 
 
@@ -171,6 +181,7 @@ def merge_waypoints_into_collection(
     target_collection_id: UUID,
     conflict_decisions: Mapping[UUID, ConflictDecision],
     duplicate_threshold_m: float = DEFAULT_DUPLICATE_THRESHOLD_M,
+    analyzed_plan: WaypointMergePlan | None = None,
 ) -> MergeResult:
     """Atomically merge an in-memory source dataset into a Collection."""
     connection = database._connect()
@@ -185,6 +196,7 @@ def merge_waypoints_into_collection(
             _list_waypoints(connection, target_collection_id),
             duplicate_threshold_m,
         )
+        _ensure_plan_unchanged(analyzed_plan, plan)
         result = _execute_waypoint_merge(
             connection,
             plan,
@@ -198,6 +210,35 @@ def merge_waypoints_into_collection(
         raise
     finally:
         connection.close()
+
+
+def _ensure_plan_unchanged(
+    analyzed_plan: MergePlan | WaypointMergePlan | None,
+    current_plan: MergePlan | WaypointMergePlan,
+) -> None:
+    if analyzed_plan is not None and analyzed_plan != current_plan:
+        raise MergePlanChangedError(
+            "Collection changed since analysis. Please analyze again."
+        )
+
+
+def _waypoint_state(
+    waypoints: list[Waypoint],
+) -> tuple[tuple[UUID, str, float, float, str, str, str, str, str], ...]:
+    return tuple(
+        (
+            waypoint.id,
+            waypoint.name,
+            waypoint.latitude,
+            waypoint.longitude,
+            waypoint.icon,
+            waypoint.color,
+            waypoint.background,
+            waypoint.note,
+            waypoint.comment,
+        )
+        for waypoint in waypoints
+    )
 
 
 def _execute_waypoint_merge(

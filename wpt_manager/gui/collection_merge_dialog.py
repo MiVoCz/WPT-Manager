@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.collection_merge import (
+    MergePlanChangedError,
     merge_collections,
     prepare_collection_merge,
 )
@@ -180,7 +181,12 @@ class CollectionMergeDialog(QDialog):
                 self.plan.target_collection.id,
                 self.conflict_decisions(),
                 self.plan.duplicate_threshold_m,
+                analyzed_plan=self.plan,
             )
+        except MergePlanChangedError as exc:
+            self.invalidate_plan()
+            QMessageBox.critical(self, "Merge failed", str(exc))
+            return
         except Exception as exc:
             QMessageBox.critical(
                 self,

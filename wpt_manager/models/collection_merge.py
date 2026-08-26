@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from enum import Enum, auto
+from uuid import UUID
 
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
+
+WaypointState = tuple[UUID, str, float, float, str, str, str, str, str]
 
 
 class ConflictDecision(Enum):
@@ -23,6 +26,8 @@ class WaypointMergePlan:
     new_waypoints: tuple[Waypoint, ...]
     conflicts: tuple[MergeConflict, ...]
     duplicate_threshold_m: float
+    source_state: tuple[WaypointState, ...]
+    target_state: tuple[WaypointState, ...]
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,8 @@ class MergePlan:
     new_waypoints: tuple[Waypoint, ...]
     conflicts: tuple[MergeConflict, ...]
     duplicate_threshold_m: float
+    source_state: tuple[WaypointState, ...]
+    target_state: tuple[WaypointState, ...]
 
 
 @dataclass(frozen=True)

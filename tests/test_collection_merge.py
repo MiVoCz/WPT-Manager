@@ -4,6 +4,7 @@ import pytest
 
 import wpt_manager.database.collection_merge as collection_merge_module
 from wpt_manager.database.collection_merge import (
+    MergePlanChangedError,
     merge_collections,
     merge_waypoints_into_collection,
     prepare_collection_merge,
@@ -397,3 +398,103 @@ def test_custom_duplicate_threshold_is_used_in_plan(tmp_path):
 
     assert default_plan.new_waypoints == (source_waypoint,)
     assert wider_plan.conflicts[0].source == source_waypoint
+
+
+@pytest.mark.parametrize("target_change", ["add", "update", "delete"])
+def test_collection_merge_rejects_target_changed_since_analysis(
+    tmp_path,
+    target_change,
+):
+    database, source, target = create_database_with_collections(tmp_path)
+    database.save_waypoint(waypoint("Source", 50.0), source.id)
+    original_target = waypoint("Target", 51.0)
+    database.save_waypoint(original_target, target.id)
+    plan = prepare_collection_merge(database, source.id, target.id)
+
+    if target_change == "add":
+        database.save_waypoint(waypoint("Added", 52.0), target.id)
+    elif target_change == "update":
+        original_target.name = "Updated target"
+        database.update_waypoint(original_target)
+    else:
+        database.delete_waypoint(original_target.id)
+    source_before = database.list_waypoints(source.id)
+    target_before = database.list_waypoints(target.id)
+
+    with pytest.raises(MergePlanChangedError, match="analyze again"):
+        merge_collections(
+            database,
+            source.id,
+            target.id,
+            {},
+            analyzed_plan=plan,
+        )
+
+    assert database.list_waypoints(source.id) == source_before
+    assert database.list_waypoints(target.id) == target_before
+
+
+def test_collection_merge_rejects_source_changed_since_analysis(tmp_path):
+    database, source, target = create_database_with_collections(tmp_path)
+    database.save_waypoint(waypoint("Source", 50.0), source.id)
+    plan = prepare_collection_merge(database, source.id, target.id)
+    database.save_waypoint(waypoint("New source", 51.0), source.id)
+    source_before = database.list_waypoints(source.id)
+
+    with pytest.raises(MergePlanChangedError, match="analyze again"):
+        merge_collections(
+            database,
+            source.id,
+            target.id,
+            {},
+            analyzed_plan=plan,
+        )
+
+    assert database.list_waypoints(source.id) == source_before
+    assert database.list_waypoints(target.id) == []
+
+
+def test_collection_merge_succeeds_after_new_analysis(tmp_path):
+    database, source, target = create_database_with_collections(tmp_path)
+    database.save_waypoint(waypoint("Source", 50.0), source.id)
+    stale_plan = prepare_collection_merge(database, source.id, target.id)
+    database.save_waypoint(waypoint("Changed target", 51.0), target.id)
+
+    with pytest.raises(MergePlanChangedError):
+        merge_collections(
+            database,
+            source.id,
+            target.id,
+            {},
+            analyzed_plan=stale_plan,
+        )
+
+    current_plan = prepare_collection_merge(database, source.id, target.id)
+    result = merge_collections(
+        database,
+        source.id,
+        target.id,
+        {},
+        analyzed_plan=current_plan,
+    )
+
+    assert result.added_count == 1
+
+
+def test_in_memory_merge_rejects_target_changed_since_analysis(tmp_path):
+    database, _, target = create_database_with_collections(tmp_path)
+    source_waypoints = [waypoint("Imported", 50.0)]
+    plan = prepare_waypoint_merge(source_waypoints, [])
+    added_target = waypoint("Added target", 51.0)
+    database.save_waypoint(added_target, target.id)
+
+    with pytest.raises(MergePlanChangedError, match="analyze again"):
+        merge_waypoints_into_collection(
+            database,
+            source_waypoints,
+            target.id,
+            {},
+            analyzed_plan=plan,
+        )
+
+    assert database.list_waypoints(target.id) == [added_target]

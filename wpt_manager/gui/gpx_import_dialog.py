@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.collection_merge import (
+    MergePlanChangedError,
     merge_waypoints_into_collection,
     prepare_waypoint_merge,
 )
@@ -211,7 +212,12 @@ class GpxImportDialog(QDialog):
                 target_id,
                 self.conflicts.decisions(),
                 self.plan.duplicate_threshold_m,
+                analyzed_plan=self.plan,
             )
+        except MergePlanChangedError as exc:
+            self.invalidate_plan()
+            QMessageBox.critical(self, "Import GPX failed", str(exc))
+            return
         except Exception as exc:
             QMessageBox.critical(
                 self,

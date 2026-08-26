@@ -212,3 +212,38 @@ def test_set_all_and_successful_merge(tmp_path, monkeypatch):
 
     dialog.close()
     application.processEvents()
+
+
+def test_changed_collection_invalidates_analyzed_plan(tmp_path, monkeypatch):
+    application, database, source, target, dialog = create_merge_dialog(
+        tmp_path
+    )
+    database.save_waypoint(
+        Waypoint(name="Source", latitude=50.0, longitude=14.0),
+        source.id,
+    )
+    select_collections(dialog, source, target)
+    dialog.analyze_button.click()
+    database.save_waypoint(
+        Waypoint(name="Changed target", latitude=51.0, longitude=14.0),
+        target.id,
+    )
+    errors = []
+    monkeypatch.setattr(dialog, "_confirm_merge", lambda: True)
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[2]),
+    )
+
+    dialog.merge_button.click()
+
+    assert dialog.plan is None
+    assert not dialog.merge_button.isEnabled()
+    assert errors == [
+        "Collection changed since analysis. Please analyze again."
+    ]
+    assert len(database.list_waypoints(target.id)) == 1
+
+    dialog.close()
+    application.processEvents()

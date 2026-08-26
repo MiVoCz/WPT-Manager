@@ -1,3 +1,4 @@
+import base64
 from uuid import UUID
 
 from PySide6.QtCore import QSignalBlocker, Signal, Slot, Qt
@@ -11,7 +12,23 @@ from wpt_manager.map_sources import (
     default_map_source_id,
     resolve_map_source,
 )
+from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
+
+
+def build_icon_data_urls(icon_catalog: list[IconInfo]) -> dict[str, str]:
+    paths_by_name = {}
+    for icon in icon_catalog:
+        paths_by_name.setdefault(icon.icon_name, icon.svg_path)
+
+    data_urls = {}
+    for icon_name, svg_path in paths_by_name.items():
+        try:
+            encoded_svg = base64.b64encode(svg_path.read_bytes()).decode("ascii")
+        except OSError:
+            continue
+        data_urls[icon_name] = f"data:image/svg+xml;base64,{encoded_svg}"
+    return data_urls
 
 
 class MapWindow(QMainWindow):
@@ -22,6 +39,7 @@ class MapWindow(QMainWindow):
         self,
         parent: QWidget | None = None,
         config: ApplicationConfig | None = None,
+        icon_catalog: list[IconInfo] | None = None,
     ) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.config = config or load_application_config()
@@ -49,7 +67,10 @@ class MapWindow(QMainWindow):
             self.map_source_combo.findData(initial_source_id)
         )
         self._update_map_source_status()
-        self.waypoint_map = WaypointMap(initial_source)
+        self.waypoint_map = WaypointMap(
+            initial_source,
+            build_icon_data_urls(icon_catalog or []),
+        )
         self.setCentralWidget(self.waypoint_map)
         self.waypoint_map.marker_clicked.connect(self._emit_marker_clicked)
         self.waypoint_map.map_clicked.connect(self.map_clicked)
@@ -57,11 +78,16 @@ class MapWindow(QMainWindow):
             self._change_map_source
         )
 
-    def set_waypoints(self, waypoints: list[Waypoint]) -> None:
-        self.waypoint_map.set_waypoints(waypoints)
+    def set_waypoints(
+        self,
+        waypoints: list[Waypoint],
+        fit_viewport: bool = True,
+    ) -> None:
+        self.waypoint_map.set_waypoints(waypoints, fit_viewport)
 
     def set_selected_waypoint_ids(self, waypoint_ids: list[UUID]) -> None:
         self.selected_waypoint_ids = list(waypoint_ids)
+        self.waypoint_map.set_selected_waypoint_ids(waypoint_ids)
 
     @Slot()
     def _change_map_source(self) -> None:

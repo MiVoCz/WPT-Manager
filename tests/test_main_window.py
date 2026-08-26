@@ -40,7 +40,7 @@ def test_main_window_defaults(tmp_path):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()
-    window = MainWindow(database)
+    window = MainWindow(database, icon_catalog=[])
 
     assert window.windowTitle() == "WPT-Manager"
     assert window.size().width() == 1000
@@ -102,7 +102,7 @@ def test_open_map_creates_one_reusable_map_window(tmp_path):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()
-    window = MainWindow(database)
+    window = MainWindow(database, icon_catalog=[])
 
     window.open_map_button.click()
     map_window = window.map_window
@@ -178,7 +178,7 @@ def test_main_window_updates_open_map_dataset_and_selection(tmp_path):
     database.save_collection(collection)
     waypoint = Waypoint(name="Place", latitude=50.0, longitude=14.0)
     database.save_waypoint(waypoint, collection.id)
-    window = MainWindow(database)
+    window = MainWindow(database, icon_catalog=[])
     window.open_map()
     map_window = window.map_window
     assert map_window is not None
@@ -191,6 +191,10 @@ def test_main_window_updates_open_map_dataset_and_selection(tmp_path):
             "name": "Place",
             "latitude": 50.0,
             "longitude": 14.0,
+            "icon": "marker",
+            "color": "#FF0000",
+            "background": "circle",
+            "iconSvgUrl": None,
         }
     ]
 
@@ -322,7 +326,7 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     )
     database.save_waypoint(first_waypoint, first_collection.id)
     database.save_waypoint(second_waypoint, second_collection.id)
-    window = MainWindow(database)
+    window = MainWindow(database, icon_catalog=[])
 
     assert window.waypoint_list.count() == 0
 
@@ -342,6 +346,10 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
             "name": "Pont du Gard",
             "latitude": 43.947070,
             "longitude": 4.535600,
+            "icon": "marker",
+            "color": "#FF0000",
+            "background": "circle",
+            "iconSvgUrl": None,
         }
     ]
 
@@ -357,6 +365,10 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
             "name": "Koloseum",
             "latitude": 41.890210,
             "longitude": 12.492231,
+            "icon": "marker",
+            "color": "#FF0000",
+            "background": "circle",
+            "iconSvgUrl": None,
         }
     ]
 
@@ -1003,9 +1015,24 @@ def test_save_button_updates_selected_waypoint(tmp_path, monkeypatch):
         longitude=4.535600,
     )
     database.save_waypoint(waypoint, collection.id)
-    window = MainWindow(database)
+    svg_path = tmp_path / "historic_archaeological_site.svg"
+    svg_path.write_text(
+        "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        encoding="utf-8",
+    )
+    window = MainWindow(
+        database,
+        icon_catalog=[
+            IconInfo(
+                group="Test",
+                icon_name="historic_archaeological_site",
+                svg_path=svg_path,
+            )
+        ],
+    )
     window.collection_list.setCurrentRow(0)
     window.waypoint_list.setCurrentRow(0)
+    window.open_map()
     messages = []
     monkeypatch.setattr(
         QMessageBox,
@@ -1041,8 +1068,18 @@ def test_save_button_updates_selected_waypoint(tmp_path, monkeypatch):
     assert window.waypoint_list.currentItem().text() == "Pont du Gard"
     assert window.name_edit.text() == "Pont du Gard"
     assert window.color_preview.autoFillBackground()
+    assert window.map_window is not None
+    marker_payload = window.map_window.waypoint_map._waypoint_payload[0]
+    assert marker_payload["icon"] == "historic_archaeological_site"
+    assert marker_payload["color"] == "#FF8000"
+    assert marker_payload["background"] == "square"
+    assert marker_payload["iconSvgUrl"].startswith(
+        "data:image/svg+xml;base64,"
+    )
+    assert not window.map_window.waypoint_map._pending_fit_viewport
     assert messages == ['Waypoint "Pont du Gard" was saved.']
 
+    window.map_window.close()
     window.close()
     application.processEvents()
 

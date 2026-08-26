@@ -1,5 +1,6 @@
 import json
 import logging
+from uuid import UUID
 
 from PySide6.QtCore import QObject, QEvent, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -74,6 +75,50 @@ MAP_HTML = """<!DOCTYPE html>
     .mapy-logo-control img {
       display: block;
     }
+    .wpt-marker-icon {
+      background: transparent;
+      border: 0;
+    }
+    .waypoint-marker {
+      box-sizing: border-box;
+      width: 32px;
+      height: 32px;
+      padding: 3px;
+      transition: transform 120ms ease, filter 120ms ease;
+    }
+    .waypoint-marker.selected {
+      transform: scale(1.3);
+      filter: drop-shadow(0 0 2px #FFFFFF)
+              drop-shadow(0 0 4px #FFFFFF)
+              drop-shadow(0 0 4px #111827)
+              drop-shadow(0 0 7px rgba(17, 24, 39, 0.95));
+    }
+    .wpt-marker-shape {
+      box-sizing: border-box;
+      display: flex;
+      width: 100%;
+      height: 100%;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid rgba(255, 255, 255, 0.9);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+    }
+    .wpt-marker-shape.circle { border-radius: 50%; }
+    .wpt-marker-shape.square { border-radius: 3px; }
+    .wpt-marker-shape.octagon {
+      clip-path: polygon(
+        30% 0, 70% 0, 100% 30%, 100% 70%,
+        70% 100%, 30% 100%, 0 70%, 0 30%
+      );
+    }
+    .wpt-marker-shape img {
+      display: block;
+      width: 18px;
+      height: 18px;
+      object-fit: contain;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -90,6 +135,8 @@ MAP_HTML = """<!DOCTYPE html>
     let map = null;
     let baseTileLayer = null;
     let markerLayer = null;
+    let markersById = new Map();
+    let selectedWaypointIds = new Set();
     let mapyLogoControl = null;
     let bridge = null;
     let readyReported = false;
@@ -202,25 +249,70 @@ MAP_HTML = """<!DOCTYPE html>
       reportReady();
     }
 
-    window.setWaypoints = function(waypoints) {
+    function applyMarkerSelection(waypointId, marker) {
+      const selected = selectedWaypointIds.has(waypointId);
+      marker.setZIndexOffset(selected ? 1000 : 0);
+      const element = marker.getElement();
+      if (!element) return;
+      const shell = element.querySelector(".waypoint-marker");
+      if (shell) {
+        shell.classList.toggle("selected", selected);
+      }
+    }
+
+    window.setSelectedWaypointIds = function(waypointIds) {
+      selectedWaypointIds = new Set(waypointIds);
+      for (const [waypointId, marker] of markersById) {
+        applyMarkerSelection(waypointId, marker);
+      }
+    };
+
+    window.setWaypoints = function(waypoints, fitViewport = true) {
       if (!map || !markerLayer) {
         console.error("setWaypoints called before the map was ready.");
         return;
       }
       markerLayer.clearLayers();
+      markersById.clear();
       const bounds = [];
       for (const waypoint of waypoints) {
-        const marker = L.marker([waypoint.latitude, waypoint.longitude]);
+        const background = ["circle", "square", "octagon"].includes(
+          waypoint.background
+        ) ? waypoint.background : "square";
+        const shell = L.DomUtil.create("div", "waypoint-marker");
+        const shape = L.DomUtil.create(
+          "div",
+          "wpt-marker-shape " + background,
+          shell
+        );
+        shape.style.backgroundColor = waypoint.color;
+        if (waypoint.iconSvgUrl) {
+          const iconImage = L.DomUtil.create("img", "", shape);
+          iconImage.src = waypoint.iconSvgUrl;
+          iconImage.alt = "";
+        }
+        const icon = L.divIcon({
+          className: "wpt-marker-icon",
+          html: shell,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        });
+        const marker = L.marker(
+          [waypoint.latitude, waypoint.longitude],
+          {icon: icon}
+        );
         marker.bindTooltip(waypoint.name);
         marker.on("click", () => {
           if (bridge) bridge.markerClicked(waypoint.id);
         });
         marker.addTo(markerLayer);
+        markersById.set(waypoint.id, marker);
+        applyMarkerSelection(waypoint.id, marker);
         bounds.push([waypoint.latitude, waypoint.longitude]);
       }
-      if (bounds.length > 0) {
+      if (fitViewport && bounds.length > 0) {
         map.fitBounds(bounds, {padding: [20, 20], maxZoom: 14});
-      } else {
+      } else if (fitViewport) {
         map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
       }
     };
@@ -309,6 +401,7 @@ class WaypointMap(MapWebView):
     def __init__(
         self,
         initial_map_source: ResolvedMapSource | None = None,
+        icon_data_urls: dict[str, str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -317,13 +410,17 @@ class WaypointMap(MapWebView):
                 OPENSTREETMAP_SOURCE_ID,
                 None,
             )
-        self._waypoint_payload: list[dict[str, str | float]] = []
+        self._icon_data_urls = icon_data_urls or {}
+        self._waypoint_payload: list[dict[str, str | float | None]] = []
+        self._selected_waypoint_ids: list[str] = []
         self._map_source_payload = self._source_payload(initial_map_source)
         self._page_loaded = False
         self._map_ready = False
         self._view_visible = False
         self._initial_size_invalidated = False
         self._pending_update = True
+        self._pending_fit_viewport = True
+        self._pending_selection = True
         self._pending_map_source = True
         self.console_messages: list[str] = []
         self.setSizePolicy(
@@ -357,18 +454,34 @@ class WaypointMap(MapWebView):
         """Return the directly embedded web view for API compatibility."""
         return self
 
-    def set_waypoints(self, waypoints: list[Waypoint]) -> None:
+    def set_waypoints(
+        self,
+        waypoints: list[Waypoint],
+        fit_viewport: bool = True,
+    ) -> None:
         self._waypoint_payload = [
             {
                 "id": str(waypoint.id),
                 "name": waypoint.name,
                 "latitude": waypoint.latitude,
                 "longitude": waypoint.longitude,
+                "icon": waypoint.icon,
+                "color": waypoint.color,
+                "background": waypoint.background,
+                "iconSvgUrl": self._icon_data_urls.get(waypoint.icon),
             }
             for waypoint in waypoints
         ]
+        self._pending_fit_viewport = fit_viewport
         self._pending_update = True
         self._flush_pending_waypoints()
+
+    def set_selected_waypoint_ids(self, waypoint_ids: list[UUID]) -> None:
+        self._selected_waypoint_ids = [
+            str(waypoint_id) for waypoint_id in waypoint_ids
+        ]
+        self._pending_selection = True
+        self._flush_pending_selection()
 
     def set_map_source(self, source: ResolvedMapSource) -> None:
         self._map_source_payload = self._source_payload(source)
@@ -384,17 +497,20 @@ class WaypointMap(MapWebView):
             return
         self._flush_pending_map_source()
         self._flush_pending_waypoints()
+        self._flush_pending_selection()
 
     def _handle_map_ready(self) -> None:
         self._map_ready = True
         self._flush_pending_map_source()
         self._invalidate_initial_size_if_ready()
         self._flush_pending_waypoints()
+        self._flush_pending_selection()
 
     def _handle_first_visible_size(self) -> None:
         self._view_visible = True
         self._invalidate_initial_size_if_ready()
         self._flush_pending_waypoints()
+        self._flush_pending_selection()
 
     def _invalidate_initial_size_if_ready(self) -> None:
         if (
@@ -414,8 +530,25 @@ class WaypointMap(MapWebView):
         ):
             return
         payload = json.dumps(self._waypoint_payload, ensure_ascii=False)
-        self._execute_javascript(f"window.setWaypoints({payload});")
+        fit_viewport = "true" if self._pending_fit_viewport else "false"
+        self._execute_javascript(
+            f"window.setWaypoints({payload}, {fit_viewport});"
+        )
         self._pending_update = False
+
+    def _flush_pending_selection(self) -> None:
+        if not (
+            self._pending_selection
+            and self._page_loaded
+            and self._map_ready
+            and self._view_visible
+        ):
+            return
+        payload = json.dumps(self._selected_waypoint_ids)
+        self._execute_javascript(
+            f"window.setSelectedWaypointIds({payload});"
+        )
+        self._pending_selection = False
 
     def _flush_pending_map_source(self) -> None:
         if not (

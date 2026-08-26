@@ -258,7 +258,10 @@ class MainWindow(QMainWindow):
 
     def open_map(self) -> None:
         if self.map_window is None:
-            self.map_window = MapWindow(self)
+            self.map_window = MapWindow(
+                self,
+                icon_catalog=self.icon_catalog,
+            )
             self.map_window.marker_clicked.connect(
                 self._select_waypoint_from_map
             )
@@ -274,6 +277,17 @@ class MainWindow(QMainWindow):
         self._map_waypoints = list(waypoints)
         if self.map_window is not None:
             self.map_window.set_waypoints(self._map_waypoints)
+
+    def _update_map_waypoint(self, waypoint: Waypoint) -> None:
+        self._map_waypoints = [
+            waypoint if item.id == waypoint.id else item
+            for item in self._map_waypoints
+        ]
+        if self.map_window is not None:
+            self.map_window.set_waypoints(
+                self._map_waypoints,
+                fit_viewport=False,
+            )
 
     def _sync_map_selection(self) -> None:
         self._selected_waypoint_ids = [
@@ -602,6 +616,7 @@ class MainWindow(QMainWindow):
             return
 
         current_item.setText(waypoint.name)
+        self._update_map_waypoint(waypoint)
         self.load_waypoint(current_item)
         QMessageBox.information(
             self,

@@ -400,3 +400,21 @@ class Database:
             connection.commit()
         finally:
             connection.close()
+
+    def delete_waypoints(self, waypoint_ids: list[UUID]) -> None:
+        if not waypoint_ids:
+            return
+
+        connection = self._connect()
+        try:
+            for waypoint_id in waypoint_ids:
+                connection.execute(
+                    "DELETE FROM waypoints WHERE id = ?",
+                    (str(waypoint_id),),
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()

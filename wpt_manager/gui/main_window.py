@@ -350,10 +350,12 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            for item in selected_items:
-                self.database.delete_waypoint(
+            self.database.delete_waypoints(
+                [
                     item.data(Qt.ItemDataRole.UserRole)
-                )
+                    for item in selected_items
+                ]
+            )
         except sqlite3.Error as exc:
             QMessageBox.critical(
                 self,

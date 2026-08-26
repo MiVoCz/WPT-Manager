@@ -1226,8 +1226,8 @@ def test_delete_actions_handle_database_errors(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         database,
-        "delete_waypoint",
-        lambda waypoint_id: (_ for _ in ()).throw(
+        "delete_waypoints",
+        lambda waypoint_ids: (_ for _ in ()).throw(
             sqlite3.OperationalError("Database is locked")
         ),
     )

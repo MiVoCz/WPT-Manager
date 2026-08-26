@@ -460,6 +460,84 @@ def test_delete_waypoint(tmp_path):
     assert database.get_waypoint(waypoint.id) is None
 
 
+def test_delete_multiple_waypoints(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoints = [
+        Waypoint(name="Alpha", latitude=1.0, longitude=1.0),
+        Waypoint(name="Bravo", latitude=2.0, longitude=2.0),
+    ]
+    for waypoint in waypoints:
+        database.save_waypoint(waypoint, collection.id)
+
+    database.delete_waypoints([waypoint.id for waypoint in waypoints])
+
+    assert all(
+        database.get_waypoint(waypoint.id) is None
+        for waypoint in waypoints
+    )
+
+
+def test_delete_waypoints_accepts_empty_list(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+
+    database.delete_waypoints([])
+
+
+def test_delete_waypoints_preserves_unselected_waypoints(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    selected = Waypoint(name="Selected", latitude=1.0, longitude=1.0)
+    unselected = Waypoint(name="Unselected", latitude=2.0, longitude=2.0)
+    database.save_waypoint(selected, collection.id)
+    database.save_waypoint(unselected, collection.id)
+
+    database.delete_waypoints([selected.id])
+
+    assert database.get_waypoint(selected.id) is None
+    assert database.get_waypoint(unselected.id) == unselected
+
+
+def test_delete_waypoints_rolls_back_on_mid_operation_failure(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoints = [
+        Waypoint(name="Alpha", latitude=1.0, longitude=1.0),
+        Waypoint(name="Bravo", latitude=2.0, longitude=2.0),
+    ]
+    for waypoint in waypoints:
+        database.save_waypoint(waypoint, collection.id)
+
+    connection = sqlite3.connect(database.path)
+    connection.execute(
+        f"""
+        CREATE TRIGGER fail_second_waypoint_delete
+        BEFORE DELETE ON waypoints
+        WHEN OLD.id = '{waypoints[1].id}'
+        BEGIN
+            SELECT RAISE(ABORT, 'Simulated delete failure');
+        END
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="Simulated"):
+        database.delete_waypoints([waypoint.id for waypoint in waypoints])
+
+    assert all(
+        database.get_waypoint(waypoint.id) == waypoint
+        for waypoint in waypoints
+    )
+
+
 def test_delete_missing_waypoint_does_not_fail(tmp_path):
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()

@@ -9,6 +9,20 @@ from wpt_manager.gui.icon_picker_dialog import IconPickerDialog
 from wpt_manager.io.icon_catalog import load_icon_catalog
 
 
+def test_icon_picker_has_practical_default_and_minimum_size():
+    application = QApplication.instance() or QApplication([])
+
+    dialog = IconPickerDialog([])
+
+    assert dialog.width() >= 900
+    assert dialog.height() >= 650
+    assert dialog.minimumWidth() >= 800
+    assert dialog.minimumHeight() >= 550
+
+    dialog.close()
+    application.processEvents()
+
+
 def test_icon_picker_groups_filters_and_selects_icon(tmp_path):
     application = QApplication.instance() or QApplication([])
     icon_directory = tmp_path / "icons"

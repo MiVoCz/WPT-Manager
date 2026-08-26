@@ -3,11 +3,12 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QSizePolicy,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -25,7 +26,8 @@ class IconPickerDialog(QDialog):
         super().__init__(parent)
         install_native_title_bar_theming()
         self.setWindowTitle("Select icon")
-        self.resize(700, 450)
+        self.setMinimumSize(800, 550)
+        self.resize(900, 650)
         self.selected_icon_name: str | None = None
         self.catalog = catalog
 
@@ -34,7 +36,12 @@ class IconPickerDialog(QDialog):
             self.icons_by_group.setdefault(icon.group, []).append(icon)
 
         self.group_list = QListWidget()
-        self.group_list.setMaximumWidth(200)
+        self.group_list.setMinimumWidth(140)
+        self.group_list.setMaximumWidth(220)
+        self.group_list.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search")
@@ -46,17 +53,26 @@ class IconPickerDialog(QDialog):
         self.icon_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.icon_list.setWordWrap(True)
         self.icon_list.setUniformItemSizes(True)
+        self.icon_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self.empty_label = QLabel("No icons available.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        content_layout = QHBoxLayout()
-        content_layout.addWidget(self.group_list)
-
-        icon_layout = QVBoxLayout()
+        icon_panel = QWidget()
+        icon_layout = QVBoxLayout(icon_panel)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
         icon_layout.addWidget(self.empty_label)
         icon_layout.addWidget(self.icon_list)
-        content_layout.addLayout(icon_layout, 1)
+
+        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.content_splitter.addWidget(self.group_list)
+        self.content_splitter.addWidget(icon_panel)
+        self.content_splitter.setStretchFactor(0, 0)
+        self.content_splitter.setStretchFactor(1, 1)
+        self.content_splitter.setSizes([180, 700])
 
         self.button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -70,7 +86,7 @@ class IconPickerDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.search_edit)
-        layout.addLayout(content_layout)
+        layout.addWidget(self.content_splitter, 1)
         layout.addWidget(self.button_box)
 
         self.group_list.currentItemChanged.connect(self.load_group)

@@ -7,6 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -244,7 +245,9 @@ def test_waypoint_sort_combo_reloads_and_preserves_selection(tmp_path):
     connection.commit()
     connection.close()
     window = MainWindow(database)
+    window.show()
     window.collection_list.setCurrentRow(0)
+    application.processEvents()
 
     assert [
         window.waypoint_list.item(index).text()
@@ -252,8 +255,13 @@ def test_waypoint_sort_combo_reloads_and_preserves_selection(tmp_path):
     ] == ["alpha", "Zulu"]
     for index in range(window.waypoint_list.count()):
         window.waypoint_list.item(index).setSelected(True)
+    window.waypoint_list.setCurrentRow(1)
+    current_id = window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    )
 
     window.waypoint_sort_combo.setCurrentIndex(1)
+    application.processEvents()
 
     assert [
         window.waypoint_list.item(index).text()
@@ -263,6 +271,47 @@ def test_waypoint_sort_combo_reloads_and_preserves_selection(tmp_path):
         item.data(Qt.ItemDataRole.UserRole)
         for item in window.waypoint_list.selectedItems()
     } == {zulu.id, alpha.id}
+    assert window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == current_id
+    assert [
+        window.waypoint_list.model().index(index, 0).data()
+        for index in range(window.waypoint_list.count())
+    ] == ["Zulu", "alpha"]
+
+    window.close()
+    application.processEvents()
+
+
+def test_native_arrow_navigation_moves_one_waypoint_at_a_time(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    for index in range(4):
+        database.save_waypoint(
+            Waypoint(
+                name=f"Point {index}",
+                latitude=float(index),
+                longitude=14.0,
+            ),
+            collection.id,
+        )
+    window = MainWindow(database)
+    window.show()
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(1)
+    window.waypoint_list.setFocus()
+
+    QTest.keyClick(window.waypoint_list, Qt.Key.Key_Down)
+    assert window.waypoint_list.currentRow() == 2
+    QTest.keyClick(window.waypoint_list, Qt.Key.Key_Down)
+    assert window.waypoint_list.currentRow() == 3
+    QTest.keyClick(window.waypoint_list, Qt.Key.Key_Up)
+    assert window.waypoint_list.currentRow() == 2
+    QTest.keyClick(window.waypoint_list, Qt.Key.Key_Up)
+    assert window.waypoint_list.currentRow() == 1
 
     window.close()
     application.processEvents()
@@ -706,13 +755,13 @@ def test_icon_button_updates_icon_and_handles_cancel(
 
         def __init__(self, catalog, parent):
             assert catalog == []
-            assert parent is window
+            assert parent is window.waypoint_editor
 
         def exec(self):
             return QDialog.DialogCode.Accepted
 
     monkeypatch.setattr(
-        "wpt_manager.gui.main_window.IconPickerDialog",
+        "wpt_manager.gui.waypoint_editor.IconPickerDialog",
         AcceptedIconDialog,
     )
 
@@ -725,7 +774,7 @@ def test_icon_button_updates_icon_and_handles_cancel(
             return QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(
-        "wpt_manager.gui.main_window.IconPickerDialog",
+        "wpt_manager.gui.waypoint_editor.IconPickerDialog",
         RejectedIconDialog,
     )
 
@@ -789,13 +838,13 @@ def test_icon_preview_uses_cached_catalog_and_updates_live(
 
         def __init__(self, received_catalog, parent):
             assert received_catalog is catalog
-            assert parent is window
+            assert parent is window.waypoint_editor
 
         def exec(self):
             return QDialog.DialogCode.Accepted
 
     monkeypatch.setattr(
-        "wpt_manager.gui.main_window.IconPickerDialog",
+        "wpt_manager.gui.waypoint_editor.IconPickerDialog",
         AcceptedIconDialog,
     )
     window.icon_button.click()

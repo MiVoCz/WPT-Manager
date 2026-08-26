@@ -1,13 +1,10 @@
 import sys
-from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from wpt_manager.database.database import Database
 from wpt_manager.gui.main_window import MainWindow
-
-
-DATABASE_PATH = Path("data") / "wpt_manager.db"
+from wpt_manager.paths import DATABASE_PATH
 
 
 def main() -> int:

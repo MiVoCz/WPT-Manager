@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from wpt_manager.models.icon import IconInfo
+from wpt_manager.paths import ICONS_DIRECTORY
 
 
-DEFAULT_ICON_DIRECTORY = Path("data") / "icons"
+DEFAULT_ICON_DIRECTORY = ICONS_DIRECTORY
 
 
 def load_icon_catalog(

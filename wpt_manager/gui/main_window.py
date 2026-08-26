@@ -26,6 +26,7 @@ from wpt_manager.gui.collection_edit_dialog import CollectionEditDialog
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
 from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
 from wpt_manager.gui.map_window import MapWindow
+from wpt_manager.gui.new_waypoint_dialog import NewWaypointDialog
 from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.io.exceptions import GpxReaderError
@@ -221,6 +222,8 @@ class MainWindow(QMainWindow):
         self,
         current_item: QListWidgetItem | None,
         previous_item: QListWidgetItem | None = None,
+        *,
+        fit_map_viewport: bool = True,
     ) -> bool:
         del previous_item
         self.waypoint_list.clear()
@@ -252,7 +255,10 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(waypoint.name)
             item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
             self.waypoint_list.addItem(item)
-        self._set_map_waypoints(waypoints)
+        self._set_map_waypoints(
+            waypoints,
+            fit_viewport=fit_map_viewport,
+        )
         self.waypoint_list.viewport().update()
         return True
 
@@ -265,6 +271,9 @@ class MainWindow(QMainWindow):
             self.map_window.marker_clicked.connect(
                 self._select_waypoint_from_map
             )
+            self.map_window.add_waypoint_requested.connect(
+                self.add_waypoint_from_map
+            )
         self.map_window.set_waypoints(self._map_waypoints)
         self.map_window.set_selected_waypoint_ids(
             self._selected_waypoint_ids
@@ -273,10 +282,17 @@ class MainWindow(QMainWindow):
         self.map_window.raise_()
         self.map_window.activateWindow()
 
-    def _set_map_waypoints(self, waypoints: list[Waypoint]) -> None:
+    def _set_map_waypoints(
+        self,
+        waypoints: list[Waypoint],
+        fit_viewport: bool = True,
+    ) -> None:
         self._map_waypoints = list(waypoints)
         if self.map_window is not None:
-            self.map_window.set_waypoints(self._map_waypoints)
+            self.map_window.set_waypoints(
+                self._map_waypoints,
+                fit_viewport=fit_viewport,
+            )
 
     def _update_map_waypoint(self, waypoint: Waypoint) -> None:
         self._map_waypoints = [
@@ -300,6 +316,61 @@ class MainWindow(QMainWindow):
             )
 
     def _select_waypoint_from_map(self, waypoint_id: UUID) -> None:
+        for index in range(self.waypoint_list.count()):
+            item = self.waypoint_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == waypoint_id:
+                self.waypoint_list.setCurrentItem(item)
+                return
+
+    def add_waypoint_from_map(
+        self,
+        latitude: float,
+        longitude: float,
+    ) -> None:
+        collection_item = self.collection_list.currentItem()
+        if collection_item is None:
+            QMessageBox.information(
+                self,
+                "Add waypoint",
+                "Select a collection before adding a waypoint.",
+            )
+            return
+
+        dialog = NewWaypointDialog(
+            latitude,
+            longitude,
+            self.icon_catalog,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        waypoint = dialog.waypoint
+        if waypoint is None:
+            return
+
+        collection_id = collection_item.data(Qt.ItemDataRole.UserRole)
+        try:
+            self.database.save_waypoint(waypoint, collection_id)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Add waypoint failed",
+                f"The waypoint could not be saved:\n{exc}",
+            )
+            return
+
+        self._reload_and_select_waypoint(waypoint.id, collection_item)
+
+    def _reload_and_select_waypoint(
+        self,
+        waypoint_id: UUID,
+        collection_item: QListWidgetItem,
+    ) -> None:
+        if not self.load_waypoints(
+            collection_item,
+            fit_map_viewport=False,
+        ):
+            return
         for index in range(self.waypoint_list.count()):
             item = self.waypoint_list.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == waypoint_id:

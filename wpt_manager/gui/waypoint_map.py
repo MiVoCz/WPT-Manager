@@ -241,6 +241,16 @@ MAP_HTML = """<!DOCTYPE html>
       map.on("click", event => {
         if (bridge) bridge.mapClicked(event.latlng.lat, event.latlng.lng);
       });
+      map.on("contextmenu", event => {
+        if (!bridge) return;
+        event.originalEvent.preventDefault();
+        bridge.mapContextMenu(
+          event.latlng.lat,
+          event.latlng.lng,
+          event.originalEvent.clientX,
+          event.originalEvent.clientY
+        );
+      });
       new ResizeObserver(() => {
         if (map) map.invalidateSize(false);
       }).observe(
@@ -327,6 +337,7 @@ MAP_HTML = """<!DOCTYPE html>
 class MapBridge(QObject):
     marker_clicked = Signal(str)
     map_clicked = Signal(float, float)
+    map_context_menu_requested = Signal(float, float, int, int)
     map_ready = Signal()
 
     @Slot()
@@ -340,6 +351,16 @@ class MapBridge(QObject):
     @Slot(float, float)
     def mapClicked(self, latitude: float, longitude: float) -> None:
         self.map_clicked.emit(latitude, longitude)
+
+    @Slot(float, float, int, int)
+    def mapContextMenu(
+        self,
+        latitude: float,
+        longitude: float,
+        x: int,
+        y: int,
+    ) -> None:
+        self.map_context_menu_requested.emit(latitude, longitude, x, y)
 
     @Slot(str)
     def openExternalUrl(self, url: str) -> None:
@@ -396,6 +417,7 @@ class MapWebView(QWebEngineView):
 class WaypointMap(MapWebView):
     marker_clicked = Signal(str)
     map_clicked = Signal(float, float)
+    map_context_menu_requested = Signal(float, float, int, int)
     console_message = Signal(str)
 
     def __init__(
@@ -440,6 +462,9 @@ class WaypointMap(MapWebView):
         self.page().setWebChannel(self.channel)
         self.bridge.marker_clicked.connect(self.marker_clicked)
         self.bridge.map_clicked.connect(self.map_clicked)
+        self.bridge.map_context_menu_requested.connect(
+            self.map_context_menu_requested
+        )
         self.bridge.map_ready.connect(self._handle_map_ready)
         self.web_page.console_message.connect(self._record_console_message)
         self.loadFinished.connect(self._handle_load_finished)

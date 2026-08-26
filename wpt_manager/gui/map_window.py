@@ -1,8 +1,15 @@
 import base64
 from uuid import UUID
 
-from PySide6.QtCore import QSignalBlocker, Signal, Slot, Qt
-from PySide6.QtWidgets import QComboBox, QLabel, QMainWindow, QToolBar, QWidget
+from PySide6.QtCore import QPoint, QSignalBlocker, Signal, Slot, Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QToolBar,
+    QWidget,
+)
 
 from wpt_manager.config import ApplicationConfig, load_application_config
 from wpt_manager.gui.waypoint_map import WaypointMap
@@ -34,6 +41,7 @@ def build_icon_data_urls(icon_catalog: list[IconInfo]) -> dict[str, str]:
 class MapWindow(QMainWindow):
     marker_clicked = Signal(object)
     map_clicked = Signal(float, float)
+    add_waypoint_requested = Signal(float, float)
 
     def __init__(
         self,
@@ -74,6 +82,9 @@ class MapWindow(QMainWindow):
         self.setCentralWidget(self.waypoint_map)
         self.waypoint_map.marker_clicked.connect(self._emit_marker_clicked)
         self.waypoint_map.map_clicked.connect(self.map_clicked)
+        self.waypoint_map.map_context_menu_requested.connect(
+            self._show_map_context_menu
+        )
         self.map_source_combo.currentIndexChanged.connect(
             self._change_map_source
         )
@@ -111,6 +122,22 @@ class MapWindow(QMainWindow):
             self.map_source_status.setText(
                 "Mapy.com API key is not configured; using OpenStreetMap."
             )
+
+    @Slot(float, float, int, int)
+    def _show_map_context_menu(
+        self,
+        latitude: float,
+        longitude: float,
+        x: int,
+        y: int,
+    ) -> None:
+        menu = QMenu(self)
+        action = menu.addAction("Add waypoint here")
+        action.triggered.connect(
+            lambda: self.add_waypoint_requested.emit(latitude, longitude)
+        )
+        self._map_context_menu = menu
+        menu.popup(self.waypoint_map.mapToGlobal(QPoint(x, y)))
 
     @Slot(str)
     def _emit_marker_clicked(self, waypoint_id: str) -> None:

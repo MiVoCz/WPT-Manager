@@ -228,6 +228,100 @@ def test_main_window_loads_collection_without_open_map(tmp_path):
     application.processEvents()
 
 
+def test_add_waypoint_from_map_requires_selected_collection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    window = MainWindow(database, icon_catalog=[])
+    messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: messages.append(args[2]),
+    )
+
+    window.add_waypoint_from_map(50.123, 14.456)
+
+    assert database.list_waypoints(collection.id) == []
+    assert messages == ["Select a collection before adding a waypoint."]
+
+    window.close()
+    application.processEvents()
+
+
+def test_add_waypoint_from_map_saves_selects_sorts_and_updates_map(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    existing = Waypoint(name="Zulu", latitude=49.0, longitude=13.0)
+    database.save_waypoint(existing, collection.id)
+    created = Waypoint(
+        name="Alpha",
+        latitude=50.123,
+        longitude=14.456,
+    )
+
+    class AcceptedWaypointDialog:
+        def __init__(self, latitude, longitude, icon_catalog, parent):
+            assert latitude == 50.123
+            assert longitude == 14.456
+            assert icon_catalog == []
+            self.waypoint = created
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.NewWaypointDialog",
+        AcceptedWaypointDialog,
+    )
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+
+    window.add_waypoint_from_map(50.123, 14.456)
+
+    stored = database.get_waypoint(created.id)
+    assert stored is not None
+    assert stored.latitude == 50.123
+    assert stored.longitude == 14.456
+    assert database.list_waypoints(collection.id) == [created, existing]
+    assert window.waypoint_sort_combo.currentData() == "name"
+    assert [
+        window.waypoint_list.item(index).text()
+        for index in range(window.waypoint_list.count())
+    ] == ["Alpha", "Zulu"]
+    assert window.waypoint_list.currentItem() is not None
+    assert window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == created.id
+    assert window.name_edit.text() == "Alpha"
+    assert window.map_window is not None
+    assert {
+        payload["id"]
+        for payload in window.map_window.waypoint_map._waypoint_payload
+    } == {str(created.id), str(existing.id)}
+    assert window.map_window.selected_waypoint_ids == [created.id]
+    assert window.map_window.waypoint_map._selected_waypoint_ids == [
+        str(created.id)
+    ]
+    assert not window.map_window.waypoint_map._pending_fit_viewport
+
+    window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
 def test_main_window_loads_collections_with_uuid(tmp_path):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")

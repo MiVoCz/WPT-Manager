@@ -4,7 +4,7 @@ from uuid import uuid4
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMenu
 
 from wpt_manager.gui.waypoint_map import MAP_HTML, MapBridge, WaypointMap
 from wpt_manager.gui.map_window import build_icon_data_urls
@@ -63,6 +63,8 @@ def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
     assert ".waypoint-marker.selected" in MAP_HTML
     assert "transform: scale(1.3)" in MAP_HTML
     assert "marker.setZIndexOffset(selected ? 1000 : 0)" in MAP_HTML
+    assert 'map.on("contextmenu"' in MAP_HTML
+    assert "bridge.mapContextMenu(" in MAP_HTML
     assert waypoint_map.web_view.minimumWidth() == 300
     assert waypoint_map.web_view.minimumHeight() == 300
     assert waypoint_map.web_profile.httpUserAgent() == (
@@ -214,4 +216,35 @@ def test_single_multi_and_cleared_marker_selection(monkeypatch):
     assert scripts[-1] == "window.setSelectedWaypointIds([]);"
 
     waypoint_map.close()
+    application.processEvents()
+
+
+def test_map_context_menu_passes_coordinates_and_requests_add(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    bridge = MapBridge()
+    bridge_coordinates = []
+    bridge.map_context_menu_requested.connect(
+        lambda *values: bridge_coordinates.append(values)
+    )
+
+    bridge.mapContextMenu(50.123, 14.456, 120, 80)
+
+    assert bridge_coordinates == [(50.123, 14.456, 120, 80)]
+
+    from wpt_manager.config import ApplicationConfig
+    from wpt_manager.gui.map_window import MapWindow
+
+    monkeypatch.setattr(QMenu, "popup", lambda *args: None)
+    map_window = MapWindow(config=ApplicationConfig())
+    requested_coordinates = []
+    map_window.add_waypoint_requested.connect(
+        lambda *values: requested_coordinates.append(values)
+    )
+
+    map_window._show_map_context_menu(50.123, 14.456, 120, 80)
+    map_window._map_context_menu.actions()[0].trigger()
+
+    assert requested_coordinates == [(50.123, 14.456)]
+
+    map_window.close()
     application.processEvents()

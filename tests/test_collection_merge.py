@@ -7,6 +7,7 @@ from wpt_manager.database.collection_merge import (
     merge_collections,
     merge_waypoints_into_collection,
     prepare_collection_merge,
+    prepare_waypoint_merge,
 )
 from wpt_manager.database.database import Database
 from wpt_manager.models.collection import Collection
@@ -31,6 +32,95 @@ def waypoint(name: str, latitude: float, **values) -> Waypoint:
         longitude=14.0,
         **values,
     )
+
+
+def test_single_target_is_matched_only_to_nearest_source():
+    nearest_source = waypoint("Nearest source", 50.00001)
+    farther_source = waypoint("Farther source", 50.00010)
+    target = waypoint("Target", 50.0)
+
+    plan = prepare_waypoint_merge(
+        [farther_source, nearest_source],
+        [target],
+    )
+
+    assert len(plan.conflicts) == 1
+    assert plan.conflicts[0].source is nearest_source
+    assert plan.conflicts[0].target is target
+    assert plan.new_waypoints == (farther_source,)
+
+
+def test_sources_match_nearest_available_distinct_targets():
+    first_source = waypoint("First source", 50.0)
+    second_source = waypoint("Second source", 50.00030)
+    first_target = waypoint("First target", 50.00005)
+    second_target = waypoint("Second target", 50.00035)
+
+    plan = prepare_waypoint_merge(
+        [first_source, second_source],
+        [first_target, second_target],
+    )
+
+    matches = {
+        conflict.source.id: conflict.target.id
+        for conflict in plan.conflicts
+    }
+    assert matches == {
+        first_source.id: first_target.id,
+        second_source.id: second_target.id,
+    }
+    assert plan.new_waypoints == ()
+
+
+def test_source_order_does_not_change_one_to_one_matching():
+    first_source = waypoint("First source", 50.0)
+    second_source = waypoint("Second source", 50.00030)
+    first_target = waypoint("First target", 50.00005)
+    second_target = waypoint("Second target", 50.00035)
+
+    forward = prepare_waypoint_merge(
+        [first_source, second_source],
+        [first_target, second_target],
+    )
+    reversed_sources = prepare_waypoint_merge(
+        [second_source, first_source],
+        [first_target, second_target],
+    )
+
+    def matches(plan):
+        return {
+            conflict.source.id: conflict.target.id
+            for conflict in plan.conflicts
+        }
+
+    assert matches(forward) == matches(reversed_sources)
+
+
+def test_use_source_replaces_each_target_at_most_once(tmp_path):
+    database, source, target = create_database_with_collections(tmp_path)
+    nearest_source = waypoint("Nearest source", 50.00001)
+    farther_source = waypoint("Farther source", 50.00010)
+    target_waypoint = waypoint("Target", 50.0)
+    database.save_waypoint(farther_source, source.id)
+    database.save_waypoint(nearest_source, source.id)
+    database.save_waypoint(target_waypoint, target.id)
+
+    plan = prepare_collection_merge(database, source.id, target.id)
+    result = merge_collections(
+        database,
+        source.id,
+        target.id,
+        {
+            plan.conflicts[0].source.id: ConflictDecision.USE_SOURCE,
+        },
+    )
+
+    assert result.replaced_count == 1
+    assert result.added_count == 1
+    replaced = database.get_waypoint(target_waypoint.id)
+    assert replaced is not None
+    assert replaced.name == nearest_source.name
+    assert len(database.list_waypoints(target.id)) == 2
 
 
 def test_merge_without_conflicts(tmp_path):

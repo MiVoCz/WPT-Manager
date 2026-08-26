@@ -112,28 +112,54 @@ def prepare_waypoint_merge(
     duplicate_threshold_m: float = DEFAULT_DUPLICATE_THRESHOLD_M,
 ) -> WaypointMergePlan:
     """Build a merge plan for an in-memory source dataset."""
-    new_waypoints: list[Waypoint] = []
+    remaining_sources = list(source_waypoints)
+    remaining_targets = list(target_waypoints)
     conflicts: list[MergeConflict] = []
 
-    for source in source_waypoints:
-        match = find_nearest_duplicate(
-            source,
-            target_waypoints,
-            duplicate_threshold_m,
-        )
-        if match is None:
-            new_waypoints.append(source)
-        else:
-            conflicts.append(
-                MergeConflict(
-                    source=match.source,
-                    target=match.target,
-                    distance_m=match.distance_m,
+    while remaining_sources and remaining_targets:
+        candidate_matches = [
+            match
+            for source in remaining_sources
+            if (
+                match := find_nearest_duplicate(
+                    source,
+                    remaining_targets,
+                    duplicate_threshold_m,
                 )
             )
+            is not None
+        ]
+        if not candidate_matches:
+            break
+
+        match = min(
+            candidate_matches,
+            key=lambda candidate: (
+                candidate.distance_m,
+                candidate.source.id.int,
+                candidate.target.id.int,
+            ),
+        )
+        conflicts.append(
+            MergeConflict(
+                source=match.source,
+                target=match.target,
+                distance_m=match.distance_m,
+            )
+        )
+        remaining_sources = [
+            source
+            for source in remaining_sources
+            if source.id != match.source.id
+        ]
+        remaining_targets = [
+            target
+            for target in remaining_targets
+            if target.id != match.target.id
+        ]
 
     return WaypointMergePlan(
-        new_waypoints=tuple(new_waypoints),
+        new_waypoints=tuple(remaining_sources),
         conflicts=tuple(conflicts),
         duplicate_threshold_m=duplicate_threshold_m,
     )

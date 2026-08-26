@@ -147,15 +147,32 @@ class MainWindow(QMainWindow):
         self.export_button.clicked.connect(self.export_gpx_file)
         self.load_collections()
 
-    def load_collections(self) -> None:
+    def load_collections(self) -> bool:
+        try:
+            collections = self.database.list_collections()
+        except (sqlite3.Error, ValueError) as exc:
+            self.collection_list.clear()
+            self.waypoint_list.clear()
+            self.clear_waypoint_editor()
+            self.export_button.setEnabled(False)
+            self.delete_collection_button.setEnabled(False)
+            self.merge_collections_button.setEnabled(False)
+            QMessageBox.critical(
+                self,
+                "Load Collections failed",
+                f"The Collections could not be loaded:\n{exc}",
+            )
+            return False
+
         self.collection_list.clear()
-        for collection in self.database.list_collections():
+        for collection in collections:
             item = QListWidgetItem(collection.name)
             item.setData(Qt.ItemDataRole.UserRole, collection.id)
             self.collection_list.addItem(item)
         self.merge_collections_button.setEnabled(
             self.collection_list.count() >= 2
         )
+        return True
 
     def open_merge_dialog(self) -> None:
         current_item = self.collection_list.currentItem()
@@ -178,7 +195,8 @@ class MainWindow(QMainWindow):
         self.reload_and_select_collection(target_id)
 
     def reload_and_select_collection(self, collection_id: UUID) -> None:
-        self.load_collections()
+        if not self.load_collections():
+            return
         for index in range(self.collection_list.count()):
             item = self.collection_list.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == collection_id:
@@ -189,23 +207,37 @@ class MainWindow(QMainWindow):
         self,
         current_item: QListWidgetItem | None,
         previous_item: QListWidgetItem | None = None,
-    ) -> None:
+    ) -> bool:
         del previous_item
         self.waypoint_list.clear()
+        self.clear_waypoint_editor()
         self.export_button.setEnabled(current_item is not None)
         self.delete_collection_button.setEnabled(current_item is not None)
         if current_item is None:
-            return
+            return True
 
         collection_id = current_item.data(Qt.ItemDataRole.UserRole)
-        for waypoint in self.database.list_waypoints(
-            collection_id,
-            self.waypoint_sort_combo.currentData(),
-        ):
+        try:
+            waypoints = self.database.list_waypoints(
+                collection_id,
+                self.waypoint_sort_combo.currentData(),
+            )
+        except (sqlite3.Error, ValueError) as exc:
+            self.waypoint_list.clear()
+            self.clear_waypoint_editor()
+            QMessageBox.critical(
+                self,
+                "Load Waypoints failed",
+                f"The Waypoints could not be loaded:\n{exc}",
+            )
+            return False
+
+        for waypoint in waypoints:
             item = QListWidgetItem(waypoint.name)
             item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
             self.waypoint_list.addItem(item)
         self.waypoint_list.viewport().update()
+        return True
 
     def reload_sorted_waypoints(self) -> None:
         collection_item = self.collection_list.currentItem()
@@ -223,22 +255,26 @@ class MainWindow(QMainWindow):
             else None
         )
         self.waypoint_list.setUpdatesEnabled(False)
+        loaded = False
         try:
             with QSignalBlocker(self.waypoint_list):
-                self.load_waypoints(collection_item)
-                for index in range(self.waypoint_list.count()):
-                    item = self.waypoint_list.item(index)
-                    waypoint_id = item.data(Qt.ItemDataRole.UserRole)
-                    if waypoint_id in selected_ids:
-                        item.setSelected(True)
-                    if waypoint_id == current_id:
-                        self.waypoint_list.setCurrentItem(
-                            item,
-                            QItemSelectionModel.SelectionFlag.NoUpdate,
-                        )
+                loaded = self.load_waypoints(collection_item)
+                if loaded:
+                    for index in range(self.waypoint_list.count()):
+                        item = self.waypoint_list.item(index)
+                        waypoint_id = item.data(Qt.ItemDataRole.UserRole)
+                        if waypoint_id in selected_ids:
+                            item.setSelected(True)
+                        if waypoint_id == current_id:
+                            self.waypoint_list.setCurrentItem(
+                                item,
+                                QItemSelectionModel.SelectionFlag.NoUpdate,
+                            )
         finally:
             self.waypoint_list.setUpdatesEnabled(True)
         self.waypoint_list.viewport().update()
+        if not loaded:
+            return
         self.update_waypoint_selection()
 
     def load_waypoint(
@@ -252,7 +288,16 @@ class MainWindow(QMainWindow):
             return
 
         waypoint_id = current_item.data(Qt.ItemDataRole.UserRole)
-        waypoint = self.database.get_waypoint(waypoint_id)
+        try:
+            waypoint = self.database.get_waypoint(waypoint_id)
+        except (sqlite3.Error, ValueError) as exc:
+            self.clear_waypoint_editor()
+            QMessageBox.critical(
+                self,
+                "Load Waypoint failed",
+                f"The Waypoint could not be loaded:\n{exc}",
+            )
+            return
         if waypoint is None:
             return
 
@@ -268,13 +313,22 @@ class MainWindow(QMainWindow):
             return
 
         if len(selected_items) > 1:
-            waypoints = [
-                waypoint
-                for item in selected_items
-                if (waypoint := self.database.get_waypoint(
-                    item.data(Qt.ItemDataRole.UserRole)
-                )) is not None
-            ]
+            try:
+                waypoints = [
+                    waypoint
+                    for item in selected_items
+                    if (waypoint := self.database.get_waypoint(
+                        item.data(Qt.ItemDataRole.UserRole)
+                    )) is not None
+                ]
+            except (sqlite3.Error, ValueError) as exc:
+                self.clear_waypoint_editor()
+                QMessageBox.critical(
+                    self,
+                    "Load Waypoints failed",
+                    f"The selected Waypoints could not be loaded:\n{exc}",
+                )
+                return
             self.waypoint_editor.show_bulk(waypoints)
             return
 
@@ -400,7 +454,16 @@ class MainWindow(QMainWindow):
         current_item = selected_items[0]
 
         waypoint_id = current_item.data(Qt.ItemDataRole.UserRole)
-        waypoint = self.database.get_waypoint(waypoint_id)
+        try:
+            waypoint = self.database.get_waypoint(waypoint_id)
+        except (sqlite3.Error, ValueError) as exc:
+            self.clear_waypoint_editor()
+            QMessageBox.critical(
+                self,
+                "Save waypoint failed",
+                f"The waypoint could not be loaded:\n{exc}",
+            )
+            return
         if waypoint is None:
             self.clear_waypoint_editor()
             return
@@ -476,22 +539,30 @@ class MainWindow(QMainWindow):
             for item in selected_items
         ]
         waypoints = []
-        for waypoint_id in selected_ids:
-            waypoint = self.database.get_waypoint(waypoint_id)
-            if waypoint is None:
-                QMessageBox.critical(
-                    self,
-                    "Bulk update failed",
-                    f"Waypoint does not exist: {waypoint_id}",
-                )
-                return
-            if "icon" in changed_fields:
-                waypoint.icon = values.icon
-            if "color" in changed_fields:
-                waypoint.color = color_value
-            if "background" in changed_fields:
-                waypoint.background = values.background
-            waypoints.append(waypoint)
+        try:
+            for waypoint_id in selected_ids:
+                waypoint = self.database.get_waypoint(waypoint_id)
+                if waypoint is None:
+                    QMessageBox.critical(
+                        self,
+                        "Bulk update failed",
+                        f"Waypoint does not exist: {waypoint_id}",
+                    )
+                    return
+                if "icon" in changed_fields:
+                    waypoint.icon = values.icon
+                if "color" in changed_fields:
+                    waypoint.color = color_value
+                if "background" in changed_fields:
+                    waypoint.background = values.background
+                waypoints.append(waypoint)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Bulk update failed",
+                f"The waypoints could not be loaded:\n{exc}",
+            )
+            return
 
         try:
             self.database.update_waypoints(waypoints)

@@ -317,6 +317,145 @@ def test_native_arrow_navigation_moves_one_waypoint_at_a_time(tmp_path):
     application.processEvents()
 
 
+def test_load_collections_error_clears_views_and_can_recover(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    database.save_waypoint(
+        Waypoint(name="Point", latitude=50.0, longitude=14.0),
+        collection.id,
+    )
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    original = database.list_collections
+    errors = []
+    monkeypatch.setattr(
+        database,
+        "list_collections",
+        lambda: (_ for _ in ()).throw(sqlite3.OperationalError("broken")),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[2]),
+    )
+
+    assert not window.load_collections()
+
+    assert window.collection_list.count() == 0
+    assert window.waypoint_list.count() == 0
+    assert window.name_edit.text() == ""
+    assert errors == ["The Collections could not be loaded:\nbroken"]
+
+    monkeypatch.setattr(database, "list_collections", original)
+    assert window.load_collections()
+    assert window.collection_list.count() == 1
+
+    window.close()
+    application.processEvents()
+
+
+def test_load_waypoints_error_clears_view_and_can_recover(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    waypoint = Waypoint(name="Point", latitude=50.0, longitude=14.0)
+    database.save_collection(collection)
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    collection_item = window.collection_list.currentItem()
+    original = database.list_waypoints
+    errors = []
+    monkeypatch.setattr(
+        database,
+        "list_waypoints",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("broken")
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[2]),
+    )
+
+    assert not window.load_waypoints(collection_item)
+
+    assert window.collection_list.currentItem() is collection_item
+    assert window.waypoint_list.count() == 0
+    assert window.name_edit.text() == ""
+    assert errors == ["The Waypoints could not be loaded:\nbroken"]
+
+    monkeypatch.setattr(database, "list_waypoints", original)
+    assert window.load_waypoints(collection_item)
+    assert window.waypoint_list.count() == 1
+
+    window.close()
+    application.processEvents()
+
+
+def test_get_waypoint_error_clears_editor_and_can_recover(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    database.save_waypoint(
+        Waypoint(name="First", latitude=50.0, longitude=14.0),
+        collection.id,
+    )
+    database.save_waypoint(
+        Waypoint(name="Second", latitude=51.0, longitude=14.0),
+        collection.id,
+    )
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+    assert window.name_edit.text() == "First"
+    original = database.get_waypoint
+    errors = []
+    monkeypatch.setattr(
+        database,
+        "get_waypoint",
+        lambda *args: (_ for _ in ()).throw(
+            sqlite3.OperationalError("broken")
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: errors.append(args[2]),
+    )
+
+    window.waypoint_list.setCurrentRow(1)
+
+    assert window.name_edit.text() == ""
+    assert not window.save_button.isEnabled()
+    assert errors == ["The Waypoint could not be loaded:\nbroken"]
+
+    monkeypatch.setattr(database, "get_waypoint", original)
+    window.waypoint_list.setCurrentRow(0)
+    assert window.name_edit.text() == "First"
+
+    window.close()
+    application.processEvents()
+
+
 def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")

@@ -22,7 +22,7 @@ def load_icon_catalog(
             if entry.is_dir()
         ),
         key=lambda entry: (
-            entry.name.casefold() != "favorities",
+            entry.name.casefold() != "favorites",
             entry.name.casefold(),
             entry.name,
         ),

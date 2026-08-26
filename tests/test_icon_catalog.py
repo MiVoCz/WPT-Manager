@@ -4,12 +4,10 @@ from wpt_manager.models.icon import IconInfo
 
 def test_load_icon_catalog(tmp_path):
     icon_directory = tmp_path / "icons"
-    favorites_directory = icon_directory / "Favorites"
-    preferred_directory = icon_directory / "favorities"
+    favorites_directory = icon_directory / "favorites"
     custom_directory = icon_directory / "Custom"
     nested_directory = favorites_directory / "Nested"
     favorites_directory.mkdir(parents=True)
-    preferred_directory.mkdir()
     custom_directory.mkdir()
     nested_directory.mkdir()
 
@@ -19,8 +17,6 @@ def test_load_icon_catalog(tmp_path):
     later_favorite_icon.write_text("<svg/>", encoding="utf-8")
     custom_icon = custom_directory / "my_custom_icon.svg"
     custom_icon.write_text("<svg/>", encoding="utf-8")
-    preferred_icon = preferred_directory / "mx_special_flag.svg"
-    preferred_icon.write_text("<svg/>", encoding="utf-8")
     (favorites_directory / "ignored.txt").write_text(
         "ignored",
         encoding="utf-8",
@@ -34,24 +30,19 @@ def test_load_icon_catalog(tmp_path):
 
     assert catalog == [
         IconInfo(
-            group="favorities",
-            icon_name="special_flag",
-            svg_path=preferred_icon,
+            group="favorites",
+            icon_name="amenity_fuel",
+            svg_path=favorite_icon,
+        ),
+        IconInfo(
+            group="favorites",
+            icon_name="tourism_castle",
+            svg_path=later_favorite_icon,
         ),
         IconInfo(
             group="Custom",
             icon_name="my_custom_icon",
             svg_path=custom_icon,
-        ),
-        IconInfo(
-            group="Favorites",
-            icon_name="amenity_fuel",
-            svg_path=favorite_icon,
-        ),
-        IconInfo(
-            group="Favorites",
-            icon_name="tourism_castle",
-            svg_path=later_favorite_icon,
         ),
     ]
 

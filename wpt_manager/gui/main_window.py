@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.database import Database
+from wpt_manager.gui.collection_edit_dialog import CollectionEditDialog
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
 from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
 from wpt_manager.gui.theme import install_native_title_bar_theming
@@ -57,6 +58,8 @@ class MainWindow(QMainWindow):
         self.export_button.setEnabled(False)
         self.delete_collection_button = QPushButton("Delete Collection")
         self.delete_collection_button.setEnabled(False)
+        self.edit_collection_button = QPushButton("Edit Collection...")
+        self.edit_collection_button.setEnabled(False)
         self.merge_collections_button = QPushButton("Merge Collections...")
         self.merge_collections_button.setEnabled(False)
 
@@ -67,6 +70,7 @@ class MainWindow(QMainWindow):
         collection_buttons = QHBoxLayout()
         collection_buttons.addWidget(self.import_button)
         collection_buttons.addWidget(self.export_button)
+        collection_buttons.addWidget(self.edit_collection_button)
         collection_buttons.addWidget(self.delete_collection_button)
         collection_layout.addLayout(collection_buttons)
         collection_layout.addWidget(self.merge_collections_button)
@@ -128,6 +132,7 @@ class MainWindow(QMainWindow):
         self.delete_collection_button.clicked.connect(
             self.delete_collection
         )
+        self.edit_collection_button.clicked.connect(self.edit_collection)
         self.merge_collections_button.clicked.connect(
             self.open_merge_dialog
         )
@@ -156,6 +161,7 @@ class MainWindow(QMainWindow):
             self.clear_waypoint_editor()
             self.export_button.setEnabled(False)
             self.delete_collection_button.setEnabled(False)
+            self.edit_collection_button.setEnabled(False)
             self.merge_collections_button.setEnabled(False)
             QMessageBox.critical(
                 self,
@@ -213,6 +219,7 @@ class MainWindow(QMainWindow):
         self.clear_waypoint_editor()
         self.export_button.setEnabled(current_item is not None)
         self.delete_collection_button.setEnabled(current_item is not None)
+        self.edit_collection_button.setEnabled(current_item is not None)
         if current_item is None:
             return True
 
@@ -425,6 +432,49 @@ class MainWindow(QMainWindow):
             self.clear_waypoint_editor()
             self.export_button.setEnabled(False)
             self.delete_collection_button.setEnabled(False)
+
+    def edit_collection(self) -> None:
+        current_item = self.collection_list.currentItem()
+        if current_item is None:
+            return
+        collection_id = current_item.data(Qt.ItemDataRole.UserRole)
+        try:
+            collection = self.database.get_collection(collection_id)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Edit Collection failed",
+                f"The Collection could not be loaded:\n{exc}",
+            )
+            return
+        if collection is None:
+            QMessageBox.critical(
+                self,
+                "Edit Collection failed",
+                "The Collection no longer exists.",
+            )
+            return
+
+        dialog = CollectionEditDialog(collection, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            current_collection = self.database.get_collection(collection_id)
+            if current_collection is None:
+                raise ValueError("The Collection no longer exists.")
+            current_collection.name = dialog.collection_name
+            current_collection.description = dialog.collection_description
+            self.database.update_collection(current_collection)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Edit Collection failed",
+                f"The Collection could not be saved:\n{exc}",
+            )
+            return
+
+        self.reload_and_select_collection(collection_id)
 
     def mark_bulk_field_changed(self, field: str) -> None:
         self.waypoint_editor.mark_bulk_field_changed(field)

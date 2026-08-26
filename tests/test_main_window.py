@@ -361,6 +361,69 @@ def test_load_collections_error_clears_views_and_can_recover(
     application.processEvents()
 
 
+def test_edit_collection_updates_metadata_reorders_and_preserves_selection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    alpha = Collection(name="Alpha")
+    edited = Collection(
+        name="Middle",
+        description="Old description",
+        source="mapy.com",
+        source_file="original.gpx",
+    )
+    database.save_collection(alpha)
+    database.save_collection(edited)
+    waypoint = Waypoint(name="Point", latitude=50.0, longitude=14.0)
+    database.save_waypoint(waypoint, edited.id)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(1)
+    assert window.edit_collection_button.isEnabled()
+
+    class AcceptedEditDialog:
+        collection_name = "Zulu"
+        collection_description = "New\ndescription"
+
+        def __init__(self, collection, parent):
+            assert collection.id == edited.id
+            assert parent is window
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.CollectionEditDialog",
+        AcceptedEditDialog,
+    )
+
+    window.edit_collection_button.click()
+
+    loaded = database.get_collection(edited.id)
+    assert loaded is not None
+    assert loaded.id == edited.id
+    assert loaded.name == "Zulu"
+    assert loaded.description == "New\ndescription"
+    assert loaded.source == "mapy.com"
+    assert loaded.source_file == "original.gpx"
+    assert [
+        window.collection_list.item(index).text()
+        for index in range(window.collection_list.count())
+    ] == ["Alpha", "Zulu"]
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == edited.id
+    assert window.waypoint_list.count() == 1
+    assert window.waypoint_list.item(0).data(
+        Qt.ItemDataRole.UserRole
+    ) == waypoint.id
+
+    window.close()
+    application.processEvents()
+
+
 def test_load_waypoints_error_clears_view_and_can_recover(
     tmp_path,
     monkeypatch,

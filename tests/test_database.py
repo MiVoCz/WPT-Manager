@@ -3,7 +3,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from wpt_manager.database.database import Database
+from wpt_manager.database.database import (
+    SCHEMA_VERSION,
+    Database,
+    DatabaseSchemaError,
+)
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
 
@@ -28,6 +32,30 @@ def test_initialize_database(tmp_path):
     table_names = {row[0] for row in rows}
     assert "collections" in table_names
     assert "waypoints" in table_names
+
+
+def test_new_database_has_current_schema_version(tmp_path):
+    database_path = tmp_path / "wpt_manager.db"
+
+    Database(database_path).initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+
+    assert version == SCHEMA_VERSION
+
+
+def test_initialize_marks_current_unversioned_database(tmp_path):
+    database_path = tmp_path / "wpt_manager.db"
+    Database(database_path).initialize()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA user_version = 0")
+
+    Database(database_path).initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    assert version == SCHEMA_VERSION
 
 
 def test_initialize_migrates_existing_waypoints_created_at(tmp_path):
@@ -85,14 +113,38 @@ def test_initialize_migrates_existing_waypoints_created_at(tmp_path):
     row = connection.execute(
         "SELECT name, created_at FROM waypoints"
     ).fetchone()
+    collection_row = connection.execute(
+        "SELECT name FROM collections"
+    ).fetchone()
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
     connection.close()
 
     assert column == ("created_at", "TEXT", 1, "CURRENT_TIMESTAMP")
     assert row is not None
     assert row[0] == "Existing waypoint"
     assert row[1]
+    assert collection_row == ("Existing",)
+    assert version == SCHEMA_VERSION
 
     database.initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        repeated_row = connection.execute(
+            "SELECT name, created_at FROM waypoints"
+        ).fetchone()
+    assert repeated_row == row
+
+
+def test_initialize_rejects_newer_schema_version(tmp_path):
+    database_path = tmp_path / "wpt_manager.db"
+    Database(database_path).initialize()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            f"PRAGMA user_version = {SCHEMA_VERSION + 1}"
+        )
+
+    with pytest.raises(DatabaseSchemaError, match="newer than"):
+        Database(database_path).initialize()
 
 
 def test_foreign_keys_are_enabled(tmp_path):

@@ -6,6 +6,13 @@ from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
 
 
+SCHEMA_VERSION = 2
+
+
+class DatabaseSchemaError(RuntimeError):
+    """Raised when the database schema cannot be safely opened."""
+
+
 class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -18,18 +25,84 @@ class Database:
     def initialize(self) -> None:
         connection = self._connect()
         try:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS collections (
+            version = connection.execute(
+                "PRAGMA user_version"
+            ).fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise DatabaseSchemaError(
+                    "Database schema version "
+                    f"{version} is newer than the supported version "
+                    f"{SCHEMA_VERSION}."
+                )
+
+            connection.execute("BEGIN IMMEDIATE")
+            if version == 0:
+                version = self._initialize_unversioned_schema(connection)
+
+            while version < SCHEMA_VERSION:
+                if version == 1:
+                    self._migrate_schema_1_to_2(connection)
+                    version = 2
+                else:
+                    raise DatabaseSchemaError(
+                        f"Unsupported database schema version: {version}."
+                    )
+                connection.execute(f"PRAGMA user_version = {version}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _initialize_unversioned_schema(
+        connection: sqlite3.Connection,
+    ) -> int:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        if not tables:
+            Database._create_current_schema(connection)
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            return SCHEMA_VERSION
+
+        if not {"collections", "waypoints"}.issubset(tables):
+            raise DatabaseSchemaError(
+                "Unversioned database does not contain the expected schema."
+            )
+
+        waypoint_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(waypoints)"
+            ).fetchall()
+        }
+        version = 2 if "created_at" in waypoint_columns else 1
+        connection.execute(f"PRAGMA user_version = {version}")
+        return version
+
+    @staticmethod
+    def _create_current_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+                CREATE TABLE collections (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     description TEXT NOT NULL,
                     source TEXT NOT NULL,
                     source_file TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-
-                CREATE TABLE IF NOT EXISTS waypoints (
+                )
+            """
+        )
+        connection.execute(
+            """
+                CREATE TABLE waypoints (
                     id TEXT PRIMARY KEY,
                     collection_id TEXT NOT NULL,
                     name TEXT NOT NULL,
@@ -43,29 +116,16 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (collection_id)
                         REFERENCES collections(id) ON DELETE CASCADE
-                );
-                """
-            )
-            columns = {
-                row[1]
-                for row in connection.execute(
-                    "PRAGMA table_info(waypoints)"
-                ).fetchall()
-            }
-            if "created_at" not in columns:
-                self._migrate_waypoints_created_at(connection)
-            connection.commit()
-        finally:
-            connection.close()
+                )
+            """
+        )
 
     @staticmethod
-    def _migrate_waypoints_created_at(
+    def _migrate_schema_1_to_2(
         connection: sqlite3.Connection,
     ) -> None:
-        connection.executescript(
+        connection.execute(
             """
-            BEGIN IMMEDIATE;
-
             CREATE TABLE waypoints_new (
                 id TEXT PRIMARY KEY,
                 collection_id TEXT NOT NULL,
@@ -80,8 +140,11 @@ class Database:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (collection_id)
                     REFERENCES collections(id) ON DELETE CASCADE
-            );
-
+            )
+            """
+        )
+        connection.execute(
+            """
             INSERT INTO waypoints_new (
                 id, collection_id, name, latitude, longitude,
                 icon, color, background, note, comment, created_at
@@ -89,12 +152,12 @@ class Database:
             SELECT id, collection_id, name, latitude, longitude,
                    icon, color, background, note, comment,
                    CURRENT_TIMESTAMP
-            FROM waypoints;
-
-            DROP TABLE waypoints;
-            ALTER TABLE waypoints_new RENAME TO waypoints;
-            COMMIT;
+            FROM waypoints
             """
+        )
+        connection.execute("DROP TABLE waypoints")
+        connection.execute(
+            "ALTER TABLE waypoints_new RENAME TO waypoints"
         )
 
     def save_collection(self, collection: Collection) -> None:

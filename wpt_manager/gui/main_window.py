@@ -109,6 +109,7 @@ class MainWindow(QMainWindow):
         self.color_preview.setFixedSize(24, 24)
         self.color_button = QPushButton("Choose color")
         self.background_combo = QComboBox()
+        self.background_combo.setEditable(True)
         self.background_combo.addItems(["circle", "square", "octagon"])
         self.latitude_edit = QLineEdit()
         self.latitude_edit.setReadOnly(True)
@@ -201,6 +202,9 @@ class MainWindow(QMainWindow):
             lambda: self.mark_bulk_field_changed("color")
         )
         self.background_combo.currentIndexChanged.connect(
+            lambda: self.mark_bulk_field_changed("background")
+        )
+        self.background_combo.editTextChanged.connect(
             lambda: self.mark_bulk_field_changed("background")
         )
         self.load_collections()

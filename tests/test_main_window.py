@@ -60,6 +60,7 @@ def test_main_window_defaults(tmp_path):
         window.background_combo.itemText(index)
         for index in range(window.background_combo.count())
     ] == ["circle", "square", "octagon"]
+    assert window.background_combo.isEditable()
     assert isinstance(window.latitude_edit, QLineEdit)
     assert window.latitude_edit.isReadOnly()
     assert isinstance(window.longitude_edit, QLineEdit)
@@ -335,6 +336,74 @@ def test_selecting_waypoint_loads_and_clears_editor(tmp_path):
     assert window.note_edit.text() == ""
     assert window.comment_edit.toPlainText() == ""
     assert not window.save_button.isEnabled()
+
+    window.close()
+    application.processEvents()
+
+
+@pytest.mark.parametrize("background", ["circle", "custom-shape", ""])
+def test_background_loads_and_saves_without_data_loss(
+    tmp_path,
+    monkeypatch,
+    background,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Point",
+        latitude=50.0,
+        longitude=14.0,
+        background=background,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+
+    assert window.background_combo.currentText() == background
+    window.save_button.click()
+
+    loaded = database.get_waypoint(waypoint.id)
+    assert loaded is not None
+    assert loaded.background == background
+
+    window.close()
+    application.processEvents()
+
+
+def test_unknown_background_can_be_changed_to_known_value(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Point",
+        latitude=50.0,
+        longitude=14.0,
+        background="custom-shape",
+    )
+    database.save_waypoint(waypoint, collection.id)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+
+    window.background_combo.setCurrentIndex(
+        window.background_combo.findText("square")
+    )
+    window.save_button.click()
+
+    loaded = database.get_waypoint(waypoint.id)
+    assert loaded is not None
+    assert loaded.background == "square"
 
     window.close()
     application.processEvents()

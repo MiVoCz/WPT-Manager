@@ -33,6 +33,37 @@ def test_load_mapy_gpx():
     assert waypoints[2].longitude == 1.355004
 
 
+def test_load_empty_gpx_1_1_returns_empty_list(tmp_path):
+    gpx_file = tmp_path / "empty.gpx"
+    gpx_file.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<gpx xmlns="http://www.topografix.com/GPX/1/1" '
+        'version="1.1" creator="Test"/>',
+        encoding="utf-8",
+    )
+
+    assert load_gpx(gpx_file) == []
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        '<not-gpx xmlns="http://www.topografix.com/GPX/1/1"/>',
+        '<gpx version="1.1"/>',
+        '<gpx xmlns="http://www.topografix.com/GPX/1/0" version="1.0"/>',
+    ],
+)
+def test_load_gpx_rejects_unsupported_root_or_namespace(tmp_path, xml):
+    gpx_file = tmp_path / "unsupported.gpx"
+    gpx_file.write_text(xml, encoding="utf-8")
+
+    with pytest.raises(
+        GpxReaderError,
+        match="root element must be <gpx>.*GPX 1.1 namespace",
+    ):
+        load_gpx(gpx_file)
+
+
 def test_gpx_round_trip(tmp_path):
     original = Waypoint(
         name="Pont du Gard",

@@ -20,6 +20,13 @@ def load_gpx(path: str | Path) -> list[Waypoint]:
         ) from exc
 
     root = tree.getroot()
+    expected_root_tag = f"{{{GPX_NAMESPACE}}}gpx"
+    if root.tag != expected_root_tag:
+        raise GpxReaderError(
+            "Unsupported GPX document: root element must be <gpx> "
+            f"in the GPX 1.1 namespace ({GPX_NAMESPACE})."
+        )
+
     waypoints = []
 
     for element in root.findall(f"{{{GPX_NAMESPACE}}}wpt"):

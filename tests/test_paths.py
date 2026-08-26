@@ -17,4 +17,5 @@ def test_default_application_paths_do_not_depend_on_working_directory(
     assert paths.DATA_DIRECTORY == project_root / "data"
     assert paths.DATABASE_PATH == project_root / "data" / "wpt_manager.db"
     assert paths.ICONS_DIRECTORY == project_root / "data" / "icons"
+    assert paths.CONFIG_PATH == project_root / "data" / "config.json"
     assert not (tmp_path / "data").exists()

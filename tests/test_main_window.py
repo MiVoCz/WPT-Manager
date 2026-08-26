@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from wpt_manager.database.database import Database
 from wpt_manager.database.collection_merge import merge_collections
+from wpt_manager.config import ApplicationConfig
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.gui.map_window import MapWindow
 from wpt_manager.io.exceptions import GpxReaderError
@@ -141,6 +142,31 @@ def test_closed_map_window_can_be_opened_again(tmp_path):
 
     map_window.close()
     window.close()
+    application.processEvents()
+
+
+def test_map_window_defaults_and_fallback_follow_api_key_configuration():
+    application = QApplication.instance() or QApplication([])
+    without_key = MapWindow(config=ApplicationConfig())
+    with_key = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key")
+    )
+
+    assert without_key.map_source_combo.currentData() == "openstreetmap"
+    assert "API key is not configured" in without_key.map_source_status.text()
+    assert with_key.map_source_combo.currentData() == "mapy-outdoor"
+    assert with_key.map_source_status.text() == ""
+
+    mapy_basic_index = without_key.map_source_combo.findData("mapy-basic")
+    without_key.map_source_combo.setCurrentIndex(mapy_basic_index)
+
+    assert without_key.map_source_combo.currentData() == "openstreetmap"
+    assert without_key.waypoint_map._map_source_payload["id"] == (
+        "openstreetmap"
+    )
+
+    without_key.close()
+    with_key.close()
     application.processEvents()
 
 

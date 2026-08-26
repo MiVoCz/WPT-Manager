@@ -2,11 +2,19 @@ import json
 import logging
 
 from PySide6.QtCore import QObject, QEvent, Signal, Slot, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from wpt_manager.map_sources import (
+    MAPY_COPYRIGHT_URL,
+    MAPY_HOME_URL,
+    OPENSTREETMAP_SOURCE_ID,
+    ResolvedMapSource,
+    resolve_map_source,
+)
 from wpt_manager.models.waypoint import Waypoint
 
 
@@ -55,6 +63,17 @@ MAP_HTML = """<!DOCTYPE html>
       font-family: sans-serif;
     }
     #tile-status[hidden] { display: none; }
+    .mapy-logo-control,
+    .mapy-logo-control a,
+    .mapy-logo-control img,
+    .leaflet-control-attribution,
+    .leaflet-control-attribution a {
+      pointer-events: auto;
+    }
+    .mapy-logo-control a,
+    .mapy-logo-control img {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -69,7 +88,9 @@ MAP_HTML = """<!DOCTYPE html>
     const DEFAULT_CENTER = [49.8, 15.5];
     const DEFAULT_ZOOM = 7;
     let map = null;
+    let baseTileLayer = null;
     let markerLayer = null;
+    let mapyLogoControl = null;
     let bridge = null;
     let readyReported = false;
 
@@ -90,6 +111,63 @@ MAP_HTML = """<!DOCTYPE html>
       if (map) map.invalidateSize(false);
     };
 
+    window.setMapSource = function(source) {
+      if (!map) {
+        console.error("Map source set before the map was ready.");
+        return;
+      }
+      if (baseTileLayer) {
+        map.removeLayer(baseTileLayer);
+      }
+      if (mapyLogoControl) {
+        map.removeControl(mapyLogoControl);
+        mapyLogoControl = null;
+      }
+
+      const tileStatus = document.getElementById("tile-status");
+      let tileErrorCount = 0;
+      baseTileLayer = L.tileLayer(source.tileUrl, {
+        minZoom: 0,
+        maxZoom: source.maxZoom,
+        attribution: source.attribution
+      });
+      baseTileLayer.on("loading", () => {
+        tileErrorCount = 0;
+        tileStatus.hidden = true;
+      });
+      baseTileLayer.on("load", () => {
+        tileStatus.hidden = tileErrorCount === 0;
+      });
+      baseTileLayer.on("tileerror", event => {
+        const url = event.tile.currentSrc || event.tile.src || "unknown URL";
+        const error = event.error && event.error.message
+          ? event.error.message
+          : String(event.error || "unknown error");
+        console.error(source.label + " tile failed", url, error);
+        tileErrorCount += 1;
+        tileStatus.hidden = false;
+      });
+      baseTileLayer.addTo(map);
+
+      if (source.mapyLogoUrl) {
+        mapyLogoControl = L.control({position: "bottomleft"});
+        mapyLogoControl.onAdd = function() {
+          const container = L.DomUtil.create("div", "mapy-logo-control");
+          const link = L.DomUtil.create("a", "", container);
+          link.href = "https://mapy.com/";
+          link.target = "_blank";
+          link.dataset.externalUrl = "https://mapy.com/";
+          const logo = L.DomUtil.create("img", "", link);
+          logo.src = source.mapyLogoUrl;
+          logo.width = 100;
+          logo.alt = "Mapy.com";
+          L.DomEvent.disableClickPropagation(link);
+          return container;
+        };
+        mapyLogoControl.addTo(map);
+      }
+    };
+
     function initializeMap() {
       if (map) {
         reportReady();
@@ -102,31 +180,17 @@ MAP_HTML = """<!DOCTYPE html>
         return;
       }
       map = L.map("map").setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-      const tileStatus = document.getElementById("tile-status");
-      let tileErrorCount = 0;
-      const tileLayer = L.tileLayer(
-        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap contributors"
-      });
-      tileLayer.on("loading", () => {
-        tileErrorCount = 0;
-        tileStatus.hidden = true;
-      });
-      tileLayer.on("load", () => {
-        tileStatus.hidden = tileErrorCount === 0;
-      });
-      tileLayer.on("tileerror", event => {
-        const url = event.tile.currentSrc || event.tile.src || "unknown URL";
-        const error = event.error && event.error.message
-          ? event.error.message
-          : String(event.error || "unknown error");
-        console.error("OSM tile failed", url, error);
-        tileErrorCount += 1;
-        tileStatus.hidden = false;
-      });
-      tileLayer.addTo(map);
       markerLayer = L.layerGroup().addTo(map);
+      map.getContainer().addEventListener("click", event => {
+        const target = event.target;
+        const link = target instanceof Element
+          ? target.closest("a[data-external-url]")
+          : null;
+        if (!link || !bridge) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        bridge.openExternalUrl(link.dataset.externalUrl);
+      }, true);
       map.on("click", event => {
         if (bridge) bridge.mapClicked(event.latlng.lat, event.latlng.lng);
       });
@@ -185,6 +249,13 @@ class MapBridge(QObject):
     def mapClicked(self, latitude: float, longitude: float) -> None:
         self.map_clicked.emit(latitude, longitude)
 
+    @Slot(str)
+    def openExternalUrl(self, url: str) -> None:
+        if url not in {MAPY_HOME_URL, MAPY_COPYRIGHT_URL}:
+            LOGGER.warning("Blocked unexpected external map URL: %s", url)
+            return
+        QDesktopServices.openUrl(QUrl(url))
+
 
 class MapWebPage(QWebEnginePage):
     console_message = Signal(str)
@@ -235,14 +306,25 @@ class WaypointMap(MapWebView):
     map_clicked = Signal(float, float)
     console_message = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        initial_map_source: ResolvedMapSource | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        if initial_map_source is None:
+            initial_map_source, _ = resolve_map_source(
+                OPENSTREETMAP_SOURCE_ID,
+                None,
+            )
         self._waypoint_payload: list[dict[str, str | float]] = []
+        self._map_source_payload = self._source_payload(initial_map_source)
         self._page_loaded = False
         self._map_ready = False
         self._view_visible = False
         self._initial_size_invalidated = False
         self._pending_update = True
+        self._pending_map_source = True
         self.console_messages: list[str] = []
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -288,6 +370,11 @@ class WaypointMap(MapWebView):
         self._pending_update = True
         self._flush_pending_waypoints()
 
+    def set_map_source(self, source: ResolvedMapSource) -> None:
+        self._map_source_payload = self._source_payload(source)
+        self._pending_map_source = True
+        self._flush_pending_map_source()
+
     def _handle_load_finished(self, loaded: bool) -> None:
         self._page_loaded = loaded
         if not loaded:
@@ -295,10 +382,12 @@ class WaypointMap(MapWebView):
             LOGGER.error(message)
             self._record_console_message(message)
             return
+        self._flush_pending_map_source()
         self._flush_pending_waypoints()
 
     def _handle_map_ready(self) -> None:
         self._map_ready = True
+        self._flush_pending_map_source()
         self._invalidate_initial_size_if_ready()
         self._flush_pending_waypoints()
 
@@ -327,6 +416,28 @@ class WaypointMap(MapWebView):
         payload = json.dumps(self._waypoint_payload, ensure_ascii=False)
         self._execute_javascript(f"window.setWaypoints({payload});")
         self._pending_update = False
+
+    def _flush_pending_map_source(self) -> None:
+        if not (
+            self._pending_map_source
+            and self._page_loaded
+            and self._map_ready
+        ):
+            return
+        payload = json.dumps(self._map_source_payload, ensure_ascii=False)
+        self._execute_javascript(f"window.setMapSource({payload});")
+        self._pending_map_source = False
+
+    @staticmethod
+    def _source_payload(source: ResolvedMapSource) -> dict[str, str | int | None]:
+        return {
+            "id": source.id,
+            "label": source.label,
+            "tileUrl": source.tile_url,
+            "maxZoom": source.max_zoom,
+            "attribution": source.attribution,
+            "mapyLogoUrl": source.mapy_logo_url,
+        }
 
     def _execute_javascript(self, script: str) -> None:
         self.web_page.runJavaScript(script)

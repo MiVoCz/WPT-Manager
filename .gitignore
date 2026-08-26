@@ -6,3 +6,4 @@ __pycache__/
 .vscode/
 data/wpt_manager.db
 data/icons/
+data/config.json

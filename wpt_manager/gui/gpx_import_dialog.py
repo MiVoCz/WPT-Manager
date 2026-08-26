@@ -24,7 +24,7 @@ from wpt_manager.database.collection_merge import (
 from wpt_manager.database.database import Database
 from wpt_manager.gui.merge_conflicts_widget import MergeConflictsWidget
 from wpt_manager.gui.theme import install_native_title_bar_theming
-from wpt_manager.io.gpx_importer import import_gpx
+from wpt_manager.io.gpx_importer import import_waypoints
 from wpt_manager.io.gpx_reader import load_gpx
 from wpt_manager.models.collection_merge import (
     ConflictDecision,
@@ -175,10 +175,11 @@ class GpxImportDialog(QDialog):
 
     def _create_collection(self) -> None:
         try:
-            collection = import_gpx(
+            collection = import_waypoints(
                 self.database,
-                self.path,
+                self.source_waypoints,
                 self.name_edit.text().strip(),
+                self.path.name,
                 self.description_edit.text(),
             )
         except Exception as exc:

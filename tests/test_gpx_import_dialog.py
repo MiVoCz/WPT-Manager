@@ -49,6 +49,51 @@ def test_create_new_collection_mode_imports_collection(tmp_path, monkeypatch):
     application.processEvents()
 
 
+@pytest.mark.parametrize("file_change", ["delete", "replace"])
+def test_create_new_uses_prepared_waypoints_after_source_file_changes(
+    tmp_path,
+    monkeypatch,
+    file_change,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source_file = tmp_path / "prepared.gpx"
+    source_file.write_bytes(TEST_DATA.read_bytes())
+    read_count = 0
+
+    from wpt_manager.gui import gpx_import_dialog
+    from wpt_manager.io import gpx_importer
+
+    original_load_gpx = gpx_import_dialog.load_gpx
+
+    def counting_load_gpx(path):
+        nonlocal read_count
+        read_count += 1
+        return original_load_gpx(path)
+
+    monkeypatch.setattr(gpx_import_dialog, "load_gpx", counting_load_gpx)
+    monkeypatch.setattr(gpx_importer, "load_gpx", counting_load_gpx)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    dialog = GpxImportDialog(database, source_file)
+
+    if file_change == "delete":
+        source_file.unlink()
+    else:
+        source_file.write_text("not the prepared GPX", encoding="utf-8")
+
+    dialog.import_button.click()
+
+    collections = database.list_collections()
+    assert read_count == 1
+    assert len(collections) == 1
+    assert collections[0].source_file == "prepared.gpx"
+    assert len(database.list_waypoints(collections[0].id)) == 3
+
+    dialog.close()
+    application.processEvents()
+
+
 def test_merge_mode_analyzes_and_imports_into_target(tmp_path, monkeypatch):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")

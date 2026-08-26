@@ -2,18 +2,14 @@ from uuid import UUID
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
-    QRadioButton,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -23,13 +19,12 @@ from wpt_manager.database.collection_merge import (
     prepare_collection_merge,
 )
 from wpt_manager.database.database import Database
+from wpt_manager.gui.merge_conflicts_widget import MergeConflictsWidget
 from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.models.collection_merge import (
     ConflictDecision,
-    MergeConflict,
     MergePlan,
 )
-from wpt_manager.models.waypoint import Waypoint
 
 
 class CollectionMergeDialog(QDialog):
@@ -44,7 +39,6 @@ class CollectionMergeDialog(QDialog):
         self.database = database
         self.plan: MergePlan | None = None
         self.merged_target_id: UUID | None = None
-        self.conflict_decision_groups: dict[UUID, QButtonGroup] = {}
 
         self.setWindowTitle("Merge Collections")
         self.resize(850, 700)
@@ -74,31 +68,8 @@ class CollectionMergeDialog(QDialog):
         self.summary_label = QLabel()
         self.summary_label.setVisible(False)
 
-        self.set_all_widget = QWidget()
-        set_all_layout = QHBoxLayout(self.set_all_widget)
-        set_all_layout.setContentsMargins(0, 0, 0, 0)
-        set_all_layout.addWidget(QLabel("Set all:"))
-        self.set_all_buttons: dict[ConflictDecision, QPushButton] = {}
-        for decision, label in (
-            (ConflictDecision.KEEP_TARGET, "Keep target"),
-            (ConflictDecision.USE_SOURCE, "Use source"),
-            (ConflictDecision.KEEP_BOTH, "Keep both"),
-        ):
-            button = QPushButton(label)
-            button.clicked.connect(
-                lambda checked=False, value=decision: self.set_all(value)
-            )
-            self.set_all_buttons[decision] = button
-            set_all_layout.addWidget(button)
-        set_all_layout.addStretch()
-        self.set_all_widget.setVisible(False)
-
-        self.conflicts_widget = QWidget()
-        self.conflicts_layout = QVBoxLayout(self.conflicts_widget)
-        self.conflicts_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.conflicts_scroll = QScrollArea()
-        self.conflicts_scroll.setWidgetResizable(True)
-        self.conflicts_scroll.setWidget(self.conflicts_widget)
+        self.conflicts = MergeConflictsWidget()
+        self.conflict_decision_groups = self.conflicts.decision_groups
 
         selection_layout = QVBoxLayout()
         selection_layout.addWidget(QLabel("Source Collection"))
@@ -120,8 +91,7 @@ class CollectionMergeDialog(QDialog):
         layout.addLayout(selection_layout)
         layout.addLayout(distance_layout)
         layout.addWidget(self.summary_label)
-        layout.addWidget(self.set_all_widget)
-        layout.addWidget(self.conflicts_scroll, 1)
+        layout.addWidget(self.conflicts, 1)
         layout.addLayout(action_layout)
 
         self.source_combo.currentIndexChanged.connect(self.invalidate_plan)
@@ -141,9 +111,8 @@ class CollectionMergeDialog(QDialog):
         self.plan = None
         self.summary_label.clear()
         self.summary_label.setVisible(False)
-        self.set_all_widget.setVisible(False)
         self.merge_button.setEnabled(False)
-        self._clear_conflicts()
+        self.conflicts.clear()
         self.update_analyze_button()
 
     def update_analyze_button(self) -> None:
@@ -184,8 +153,7 @@ class CollectionMergeDialog(QDialog):
             f"Potential duplicates: {len(plan.conflicts)}"
         )
         self.summary_label.setVisible(True)
-        self._show_conflicts(plan.conflicts)
-        self.set_all_widget.setVisible(bool(plan.conflicts))
+        self.conflicts.set_conflicts(plan.conflicts)
         self.merge_button.setEnabled(True)
 
     @staticmethod
@@ -193,78 +161,11 @@ class CollectionMergeDialog(QDialog):
         value = combo.currentData()
         return UUID(value) if value is not None else None
 
-    def _show_conflicts(
-        self,
-        conflicts: tuple[MergeConflict, ...],
-    ) -> None:
-        self._clear_conflicts()
-        for conflict in conflicts:
-            panel = QGroupBox(f"Potential duplicate — {conflict.distance_m:.1f} m")
-            panel_layout = QVBoxLayout(panel)
-
-            waypoints_layout = QHBoxLayout()
-            waypoints_layout.addWidget(
-                self._waypoint_panel("Source waypoint", conflict.source)
-            )
-            waypoints_layout.addWidget(
-                self._waypoint_panel("Target waypoint", conflict.target)
-            )
-            panel_layout.addLayout(waypoints_layout)
-
-            decisions_layout = QHBoxLayout()
-            group = QButtonGroup(panel)
-            for decision, label in (
-                (ConflictDecision.KEEP_TARGET, "Keep target"),
-                (ConflictDecision.USE_SOURCE, "Use source"),
-                (ConflictDecision.KEEP_BOTH, "Keep both"),
-            ):
-                radio = QRadioButton(label)
-                group.addButton(radio, decision.value)
-                decisions_layout.addWidget(radio)
-                if decision is ConflictDecision.KEEP_TARGET:
-                    radio.setChecked(True)
-            panel_layout.addLayout(decisions_layout)
-            self.conflict_decision_groups[conflict.source.id] = group
-            self.conflicts_layout.addWidget(panel)
-
-    @staticmethod
-    def _waypoint_panel(title: str, waypoint: Waypoint) -> QGroupBox:
-        panel = QGroupBox(title)
-        form = QFormLayout(panel)
-        values = (
-            ("Name", waypoint.name),
-            ("Coordinates", f"{waypoint.latitude}, {waypoint.longitude}"),
-            ("Icon", waypoint.icon),
-            ("Color", waypoint.color),
-            ("Background", waypoint.background),
-            ("Note", waypoint.note),
-            ("Comment", waypoint.comment),
-        )
-        for label, value in values:
-            value_label = QLabel(value)
-            value_label.setWordWrap(True)
-            form.addRow(label, value_label)
-        return panel
-
-    def _clear_conflicts(self) -> None:
-        self.conflict_decision_groups.clear()
-        while self.conflicts_layout.count():
-            item = self.conflicts_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
     def set_all(self, decision: ConflictDecision) -> None:
-        for group in self.conflict_decision_groups.values():
-            button = group.button(decision.value)
-            if button is not None:
-                button.setChecked(True)
+        self.conflicts.set_all(decision)
 
     def conflict_decisions(self) -> dict[UUID, ConflictDecision]:
-        return {
-            source_id: ConflictDecision(group.checkedId())
-            for source_id, group in self.conflict_decision_groups.items()
-        }
+        return self.conflicts.decisions()
 
     def perform_merge(self) -> None:
         if self.plan is None:

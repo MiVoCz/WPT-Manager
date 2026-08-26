@@ -5,6 +5,7 @@ import pytest
 import wpt_manager.database.collection_merge as collection_merge_module
 from wpt_manager.database.collection_merge import (
     merge_collections,
+    merge_waypoints_into_collection,
     prepare_collection_merge,
 )
 from wpt_manager.database.database import Database
@@ -202,6 +203,42 @@ def test_error_during_merge_rolls_back_all_changes(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="Simulated merge failure"):
         merge_collections(database, source.id, target.id, {})
+
+    assert database.list_waypoints(target.id) == []
+
+
+def test_in_memory_waypoint_merge_rolls_back_all_changes(
+    tmp_path,
+    monkeypatch,
+):
+    database, _, target = create_database_with_collections(tmp_path)
+    source_waypoints = [
+        waypoint("First", 50.0),
+        waypoint("Second", 51.0),
+    ]
+    original_insert = collection_merge_module._insert_waypoint_copy
+    calls = 0
+
+    def fail_on_second_insert(connection, source_waypoint, target_id):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("Simulated import failure")
+        original_insert(connection, source_waypoint, target_id)
+
+    monkeypatch.setattr(
+        collection_merge_module,
+        "_insert_waypoint_copy",
+        fail_on_second_insert,
+    )
+
+    with pytest.raises(RuntimeError, match="Simulated import failure"):
+        merge_waypoints_into_collection(
+            database,
+            source_waypoints,
+            target.id,
+            {},
+        )
 
     assert database.list_waypoints(target.id) == []
 

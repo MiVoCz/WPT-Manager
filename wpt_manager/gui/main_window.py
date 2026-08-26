@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+from uuid import UUID
 
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QIcon, QPalette
@@ -12,7 +13,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -28,11 +28,11 @@ from PySide6.QtWidgets import (
 
 from wpt_manager.database.database import Database
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
+from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
 from wpt_manager.gui.icon_picker_dialog import IconPickerDialog
 from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
-from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
@@ -233,10 +233,13 @@ class MainWindow(QMainWindow):
             return
 
         target_id = dialog.merged_target_id
+        self.reload_and_select_collection(target_id)
+
+    def reload_and_select_collection(self, collection_id: UUID) -> None:
         self.load_collections()
         for index in range(self.collection_list.count()):
             item = self.collection_list.item(index)
-            if item.data(Qt.ItemDataRole.UserRole) == target_id:
+            if item.data(Qt.ItemDataRole.UserRole) == collection_id:
                 self.collection_list.setCurrentRow(index)
                 break
 
@@ -688,23 +691,20 @@ class MainWindow(QMainWindow):
         if not selected_path:
             return
 
-        source_path = Path(selected_path)
-        collection_name, accepted = QInputDialog.getText(
-            self,
-            "Import GPX",
-            "Collection name:",
-            text=source_path.stem,
+        current_item = self.collection_list.currentItem()
+        selected_target_id = (
+            current_item.data(Qt.ItemDataRole.UserRole)
+            if current_item is not None
+            else None
         )
-        if not accepted or not collection_name.strip():
-            return
-
         try:
-            collection = import_gpx(
+            dialog = GpxImportDialog(
                 self.database,
-                source_path,
-                collection_name.strip(),
+                selected_path,
+                selected_target_id,
+                self,
             )
-        except (GpxReaderError, sqlite3.Error) as exc:
+        except GpxReaderError as exc:
             QMessageBox.critical(
                 self,
                 "Import GPX failed",
@@ -712,12 +712,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.load_collections()
-        QMessageBox.information(
-            self,
-            "Import GPX",
-            f'Collection "{collection.name}" was imported.',
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_collection_id = (
+            dialog.created_collection_id or dialog.merged_target_id
         )
+        if selected_collection_id is not None:
+            self.reload_and_select_collection(selected_collection_id)
 
     def export_gpx_file(self) -> None:
         current_item = self.collection_list.currentItem()

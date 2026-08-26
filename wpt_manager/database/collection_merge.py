@@ -9,6 +9,7 @@ from wpt_manager.models.collection_merge import (
     MergeConflict,
     MergePlan,
     MergeResult,
+    WaypointMergePlan,
 )
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.validation.waypoint_duplicates import (
@@ -53,48 +54,14 @@ def merge_collections(
             target_collection_id,
             duplicate_threshold_m,
         )
-        _validate_decisions(plan, conflict_decisions)
-
-        added_count = 0
-        replaced_count = 0
-        skipped_count = 0
-        kept_both_count = 0
-
-        for waypoint in plan.new_waypoints:
-            _insert_waypoint_copy(
-                connection,
-                waypoint,
-                target_collection_id,
-            )
-            added_count += 1
-
-        for conflict in plan.conflicts:
-            decision = conflict_decisions[conflict.source.id]
-            if decision is ConflictDecision.KEEP_TARGET:
-                skipped_count += 1
-            elif decision is ConflictDecision.USE_SOURCE:
-                _replace_target_waypoint(
-                    connection,
-                    conflict.target.id,
-                    conflict.source,
-                )
-                replaced_count += 1
-            else:
-                _insert_waypoint_copy(
-                    connection,
-                    conflict.source,
-                    target_collection_id,
-                )
-                added_count += 1
-                kept_both_count += 1
-
-        connection.commit()
-        return MergeResult(
-            added_count=added_count,
-            replaced_count=replaced_count,
-            skipped_count=skipped_count,
-            kept_both_count=kept_both_count,
+        result = _execute_waypoint_merge(
+            connection,
+            plan,
+            target_collection_id,
+            conflict_decisions,
         )
+        connection.commit()
+        return result
     except Exception:
         connection.rollback()
         raise
@@ -124,6 +91,27 @@ def _prepare_merge(
 
     source_waypoints = _list_waypoints(connection, source_collection_id)
     target_waypoints = _list_waypoints(connection, target_collection_id)
+    waypoint_plan = prepare_waypoint_merge(
+        source_waypoints,
+        target_waypoints,
+        duplicate_threshold_m,
+    )
+
+    return MergePlan(
+        source_collection=source_collection,
+        target_collection=target_collection,
+        new_waypoints=waypoint_plan.new_waypoints,
+        conflicts=waypoint_plan.conflicts,
+        duplicate_threshold_m=waypoint_plan.duplicate_threshold_m,
+    )
+
+
+def prepare_waypoint_merge(
+    source_waypoints: list[Waypoint],
+    target_waypoints: list[Waypoint],
+    duplicate_threshold_m: float = DEFAULT_DUPLICATE_THRESHOLD_M,
+) -> WaypointMergePlan:
+    """Build a merge plan for an in-memory source dataset."""
     new_waypoints: list[Waypoint] = []
     conflicts: list[MergeConflict] = []
 
@@ -144,17 +132,94 @@ def _prepare_merge(
                 )
             )
 
-    return MergePlan(
-        source_collection=source_collection,
-        target_collection=target_collection,
+    return WaypointMergePlan(
         new_waypoints=tuple(new_waypoints),
         conflicts=tuple(conflicts),
         duplicate_threshold_m=duplicate_threshold_m,
     )
 
 
+def merge_waypoints_into_collection(
+    database: Database,
+    source_waypoints: list[Waypoint],
+    target_collection_id: UUID,
+    conflict_decisions: Mapping[UUID, ConflictDecision],
+    duplicate_threshold_m: float = DEFAULT_DUPLICATE_THRESHOLD_M,
+) -> MergeResult:
+    """Atomically merge an in-memory source dataset into a Collection."""
+    connection = database._connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if _get_collection(connection, target_collection_id) is None:
+            raise ValueError(
+                f"Target collection does not exist: {target_collection_id}"
+            )
+        plan = prepare_waypoint_merge(
+            source_waypoints,
+            _list_waypoints(connection, target_collection_id),
+            duplicate_threshold_m,
+        )
+        result = _execute_waypoint_merge(
+            connection,
+            plan,
+            target_collection_id,
+            conflict_decisions,
+        )
+        connection.commit()
+        return result
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def _execute_waypoint_merge(
+    connection: sqlite3.Connection,
+    plan: MergePlan | WaypointMergePlan,
+    target_collection_id: UUID,
+    conflict_decisions: Mapping[UUID, ConflictDecision],
+) -> MergeResult:
+    _validate_decisions(plan, conflict_decisions)
+    added_count = 0
+    replaced_count = 0
+    skipped_count = 0
+    kept_both_count = 0
+
+    for waypoint in plan.new_waypoints:
+        _insert_waypoint_copy(connection, waypoint, target_collection_id)
+        added_count += 1
+
+    for conflict in plan.conflicts:
+        decision = conflict_decisions[conflict.source.id]
+        if decision is ConflictDecision.KEEP_TARGET:
+            skipped_count += 1
+        elif decision is ConflictDecision.USE_SOURCE:
+            _replace_target_waypoint(
+                connection,
+                conflict.target.id,
+                conflict.source,
+            )
+            replaced_count += 1
+        else:
+            _insert_waypoint_copy(
+                connection,
+                conflict.source,
+                target_collection_id,
+            )
+            added_count += 1
+            kept_both_count += 1
+
+    return MergeResult(
+        added_count=added_count,
+        replaced_count=replaced_count,
+        skipped_count=skipped_count,
+        kept_both_count=kept_both_count,
+    )
+
+
 def _validate_decisions(
-    plan: MergePlan,
+    plan: MergePlan | WaypointMergePlan,
     decisions: Mapping[UUID, ConflictDecision],
 ) -> None:
     conflict_ids = {conflict.source.id for conflict in plan.conflicts}

@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QInputDialog,
     QLineEdit,
     QMessageBox,
     QTextEdit,
@@ -25,6 +24,7 @@ from wpt_manager.database.collection_merge import merge_collections
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_reader import load_gpx
+from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
@@ -839,21 +839,33 @@ def test_import_button_imports_gpx_and_reloads_collections(
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()
     window = MainWindow(database)
-    messages = []
     monkeypatch.setattr(
         QFileDialog,
         "getOpenFileName",
         lambda *args, **kwargs: (str(TEST_DATA), "GPX files (*.gpx)"),
     )
+
+    class SuccessfulImportDialog:
+        merged_target_id = None
+
+        def __init__(self, dialog_database, path, target_id, parent):
+            assert target_id is None
+            self.database = dialog_database
+            self.path = path
+            self.created_collection_id = None
+
+        def exec(self):
+            collection = import_gpx(
+                self.database,
+                self.path,
+                "mapy_export",
+            )
+            self.created_collection_id = collection.id
+            return QDialog.DialogCode.Accepted
+
     monkeypatch.setattr(
-        QInputDialog,
-        "getText",
-        lambda *args, **kwargs: (kwargs["text"], True),
-    )
-    monkeypatch.setattr(
-        QMessageBox,
-        "information",
-        lambda *args, **kwargs: messages.append(args[2]),
+        "wpt_manager.gui.main_window.GpxImportDialog",
+        SuccessfulImportDialog,
     )
 
     window.import_button.click()
@@ -865,7 +877,9 @@ def test_import_button_imports_gpx_and_reloads_collections(
     assert window.collection_list.item(0).data(
         Qt.ItemDataRole.UserRole
     ) == collections[0].id
-    assert messages == ['Collection "mapy_export" was imported.']
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == collections[0].id
 
     window.close()
     application.processEvents()
@@ -883,12 +897,7 @@ def test_import_button_shows_error_message(tmp_path, monkeypatch):
         lambda *args, **kwargs: (str(TEST_DATA), "GPX files (*.gpx)"),
     )
     monkeypatch.setattr(
-        QInputDialog,
-        "getText",
-        lambda *args, **kwargs: ("Chybný import", True),
-    )
-    monkeypatch.setattr(
-        "wpt_manager.gui.main_window.import_gpx",
+        "wpt_manager.gui.main_window.GpxImportDialog",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             GpxReaderError("Invalid GPX")
         ),
@@ -906,6 +915,63 @@ def test_import_button_shows_error_message(tmp_path, monkeypatch):
     assert messages == [
         "The GPX file could not be imported:\nInvalid GPX"
     ]
+
+    window.close()
+    application.processEvents()
+
+
+def test_merge_import_reloads_target_and_preserves_waypoint_sort(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    target = Collection(name="France 2026")
+    database.save_collection(target)
+    window = MainWindow(database)
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_sort_combo.setCurrentIndex(1)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(TEST_DATA), "GPX files (*.gpx)"),
+    )
+
+    class SuccessfulMergeImportDialog:
+        created_collection_id = None
+
+        def __init__(self, dialog_database, path, target_id, parent):
+            assert target_id == target.id
+            self.database = dialog_database
+            self.path = path
+            self.merged_target_id = target.id
+
+        def exec(self):
+            from wpt_manager.database.collection_merge import (
+                merge_waypoints_into_collection,
+            )
+
+            merge_waypoints_into_collection(
+                self.database,
+                load_gpx(self.path),
+                target.id,
+                {},
+            )
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.GpxImportDialog",
+        SuccessfulMergeImportDialog,
+    )
+
+    window.import_button.click()
+
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == target.id
+    assert window.waypoint_sort_combo.currentData() == "created_at"
+    assert window.waypoint_list.count() == 3
 
     window.close()
     application.processEvents()

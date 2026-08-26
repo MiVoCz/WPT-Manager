@@ -19,6 +19,13 @@ class MergeConflict:
 
 
 @dataclass(frozen=True)
+class WaypointMergePlan:
+    new_waypoints: tuple[Waypoint, ...]
+    conflicts: tuple[MergeConflict, ...]
+    duplicate_threshold_m: float
+
+
+@dataclass(frozen=True)
 class MergePlan:
     source_collection: Collection
     target_collection: Collection

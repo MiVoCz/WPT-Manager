@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from wpt_manager.database.database import Database
 from wpt_manager.database.collection_merge import merge_collections
 from wpt_manager.gui.main_window import MainWindow
+from wpt_manager.gui.map_window import MapWindow
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_reader import load_gpx
 from wpt_manager.io.gpx_importer import import_gpx
@@ -45,6 +46,7 @@ def test_main_window_defaults(tmp_path):
     assert window.size().height() == 700
     assert window.main_splitter.orientation() == Qt.Orientation.Horizontal
     assert window.main_splitter.count() == 2
+    assert window.map_window is None
     assert window.right_splitter.orientation() == Qt.Orientation.Vertical
     assert window.right_splitter.count() == 2
 
@@ -90,6 +92,107 @@ def test_main_window_defaults(tmp_path):
         for index in range(window.waypoint_sort_combo.count())
     ] == ["Name", "Added"]
     assert window.waypoint_sort_combo.currentData() == "name"
+
+    window.close()
+    application.processEvents()
+
+
+def test_open_map_creates_one_reusable_map_window(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    window = MainWindow(database)
+
+    window.open_map_button.click()
+    map_window = window.map_window
+
+    assert isinstance(map_window, MapWindow)
+    assert map_window.isVisible()
+
+    window.open_map_button.click()
+
+    assert window.map_window is map_window
+    assert map_window.isVisible()
+
+    map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_closed_map_window_can_be_opened_again(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    window = MainWindow(database)
+    window.open_map()
+    map_window = window.map_window
+    assert map_window is not None
+
+    map_window.close()
+    application.processEvents()
+
+    assert not map_window.isVisible()
+    assert window.load_collections()
+
+    window.open_map()
+
+    assert window.map_window is map_window
+    assert map_window.isVisible()
+
+    map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_main_window_updates_open_map_dataset_and_selection(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(name="Place", latitude=50.0, longitude=14.0)
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+    window.open_map()
+    map_window = window.map_window
+    assert map_window is not None
+
+    window.collection_list.setCurrentRow(0)
+
+    assert map_window.waypoint_map._waypoint_payload == [
+        {
+            "id": str(waypoint.id),
+            "name": "Place",
+            "latitude": 50.0,
+            "longitude": 14.0,
+        }
+    ]
+
+    window.waypoint_list.setCurrentRow(0)
+
+    assert map_window.selected_waypoint_ids == [waypoint.id]
+
+    map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_main_window_loads_collection_without_open_map(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(name="Place", latitude=50.0, longitude=14.0)
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database)
+
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+
+    assert window.map_window is None
+    assert window._map_waypoints == [waypoint]
+    assert window._selected_waypoint_ids == [waypoint.id]
 
     window.close()
     application.processEvents()
@@ -204,6 +307,17 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     assert window.waypoint_list.item(0).data(
         Qt.ItemDataRole.UserRole
     ) == first_waypoint.id
+    assert window._map_waypoints == [first_waypoint]
+    window.open_map()
+    assert window.map_window is not None
+    assert window.map_window.waypoint_map._waypoint_payload == [
+        {
+            "id": str(first_waypoint.id),
+            "name": "Pont du Gard",
+            "latitude": 43.947070,
+            "longitude": 4.535600,
+        }
+    ]
 
     window.collection_list.setCurrentRow(1)
     assert window.waypoint_list.count() == 1
@@ -211,12 +325,22 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     assert window.waypoint_list.item(0).data(
         Qt.ItemDataRole.UserRole
     ) == second_waypoint.id
+    assert window.map_window.waypoint_map._waypoint_payload == [
+        {
+            "id": str(second_waypoint.id),
+            "name": "Koloseum",
+            "latitude": 41.890210,
+            "longitude": 12.492231,
+        }
+    ]
 
     window.collection_list.setCurrentRow(2)
     assert window.waypoint_list.count() == 0
+    assert window.map_window.waypoint_map._waypoint_payload == []
 
     window.collection_list.setCurrentRow(-1)
     assert window.waypoint_list.count() == 0
+    assert window.map_window.waypoint_map._waypoint_payload == []
     assert not window.export_button.isEnabled()
 
     window.close()

@@ -25,6 +25,7 @@ from wpt_manager.database.database import Database
 from wpt_manager.gui.collection_edit_dialog import CollectionEditDialog
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
 from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
+from wpt_manager.gui.map_window import MapWindow
 from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.io.exceptions import GpxReaderError
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
         self.edit_collection_button.setEnabled(False)
         self.merge_collections_button = QPushButton("Merge Collections...")
         self.merge_collections_button.setEnabled(False)
+        self.open_map_button = QPushButton("Open Map")
 
         collection_panel = QGroupBox("Collections")
         collection_layout = QVBoxLayout(collection_panel)
@@ -74,6 +76,7 @@ class MainWindow(QMainWindow):
         collection_buttons.addWidget(self.delete_collection_button)
         collection_layout.addLayout(collection_buttons)
         collection_layout.addWidget(self.merge_collections_button)
+        collection_layout.addWidget(self.open_map_button)
 
         self.waypoint_list = QListWidget()
         self.waypoint_list.setSelectionMode(
@@ -92,6 +95,9 @@ class MainWindow(QMainWindow):
         waypoint_layout.addWidget(self.delete_waypoints_button)
 
         self.waypoint_editor = WaypointEditor(self.icon_catalog)
+        self.map_window: MapWindow | None = None
+        self._map_waypoints: list[Waypoint] = []
+        self._selected_waypoint_ids: list[UUID] = []
         self.editor_panel = self.waypoint_editor
         self.icon_paths_by_name = self.waypoint_editor.icon_paths_by_name
         self.name_edit = self.waypoint_editor.name_edit
@@ -136,6 +142,7 @@ class MainWindow(QMainWindow):
         self.merge_collections_button.clicked.connect(
             self.open_merge_dialog
         )
+        self.open_map_button.clicked.connect(self.open_map)
         self.collection_list.currentItemChanged.connect(
             self.load_waypoints
         )
@@ -158,6 +165,7 @@ class MainWindow(QMainWindow):
         except (sqlite3.Error, ValueError) as exc:
             self.collection_list.clear()
             self.waypoint_list.clear()
+            self._set_map_waypoints([])
             self.clear_waypoint_editor()
             self.export_button.setEnabled(False)
             self.delete_collection_button.setEnabled(False)
@@ -216,6 +224,7 @@ class MainWindow(QMainWindow):
     ) -> bool:
         del previous_item
         self.waypoint_list.clear()
+        self._set_map_waypoints([])
         self.clear_waypoint_editor()
         self.export_button.setEnabled(current_item is not None)
         self.delete_collection_button.setEnabled(current_item is not None)
@@ -243,8 +252,45 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(waypoint.name)
             item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
             self.waypoint_list.addItem(item)
+        self._set_map_waypoints(waypoints)
         self.waypoint_list.viewport().update()
         return True
+
+    def open_map(self) -> None:
+        if self.map_window is None:
+            self.map_window = MapWindow(self)
+            self.map_window.marker_clicked.connect(
+                self._select_waypoint_from_map
+            )
+        self.map_window.set_waypoints(self._map_waypoints)
+        self.map_window.set_selected_waypoint_ids(
+            self._selected_waypoint_ids
+        )
+        self.map_window.show()
+        self.map_window.raise_()
+        self.map_window.activateWindow()
+
+    def _set_map_waypoints(self, waypoints: list[Waypoint]) -> None:
+        self._map_waypoints = list(waypoints)
+        if self.map_window is not None:
+            self.map_window.set_waypoints(self._map_waypoints)
+
+    def _sync_map_selection(self) -> None:
+        self._selected_waypoint_ids = [
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.waypoint_list.selectedItems()
+        ]
+        if self.map_window is not None:
+            self.map_window.set_selected_waypoint_ids(
+                self._selected_waypoint_ids
+            )
+
+    def _select_waypoint_from_map(self, waypoint_id: UUID) -> None:
+        for index in range(self.waypoint_list.count()):
+            item = self.waypoint_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == waypoint_id:
+                self.waypoint_list.setCurrentItem(item)
+                return
 
     def reload_sorted_waypoints(self) -> None:
         collection_item = self.collection_list.currentItem()
@@ -312,6 +358,7 @@ class MainWindow(QMainWindow):
 
     def update_waypoint_selection(self) -> None:
         selected_items = self.waypoint_list.selectedItems()
+        self._sync_map_selection()
         self.delete_waypoints_button.setEnabled(bool(selected_items))
         self.clear_waypoint_editor()
 

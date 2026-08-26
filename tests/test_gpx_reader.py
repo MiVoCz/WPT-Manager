@@ -70,3 +70,42 @@ def test_invalid_gpx(tmp_path):
 
     with pytest.raises(GpxReaderError):
         load_gpx(gpx_file)
+
+
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "name", "expected_error"),
+    [
+        ("90.1", "14", "Too north", "Latitude must be between"),
+        ("50", "180.1", "Too east", "Longitude must be between"),
+        ("nan", "14", "NaN latitude", "Latitude must be a finite"),
+        ("50", "nan", "NaN longitude", "Longitude must be a finite"),
+        ("inf", "14", "Infinite latitude", "Latitude must be a finite"),
+        ("50", "-inf", "Infinite longitude", "Longitude must be a finite"),
+        ("50", "14", "", "Waypoint name cannot be empty"),
+    ],
+)
+def test_load_gpx_rejects_invalid_waypoint(
+    tmp_path,
+    latitude,
+    longitude,
+    name,
+    expected_error,
+):
+    name_element = f"<name>{name}</name>" if name else ""
+    gpx_file = tmp_path / "invalid_waypoint.gpx"
+    gpx_file.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">'
+        f'<wpt lat="{latitude}" lon="{longitude}">{name_element}</wpt>'
+        "</gpx>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GpxReaderError) as exc_info:
+        load_gpx(gpx_file)
+
+    assert expected_error in str(exc_info.value)
+    if name:
+        assert name in str(exc_info.value)
+    else:
+        assert "unnamed waypoint" in str(exc_info.value)

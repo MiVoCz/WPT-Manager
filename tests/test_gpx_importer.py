@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from wpt_manager.database.database import Database
+from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.models.waypoint import Waypoint
 
@@ -65,4 +66,31 @@ def test_import_gpx_rolls_back_on_storage_error(tmp_path, monkeypatch):
     finally:
         connection.close()
 
+    assert waypoint_count == (0,)
+
+
+def test_invalid_waypoint_rolls_back_entire_gpx_import(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    gpx_file = tmp_path / "partially_invalid.gpx"
+    gpx_file.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">'
+        '<wpt lat="50" lon="14"><name>Valid first</name></wpt>'
+        '<wpt lat="95" lon="15"><name>Invalid second</name></wpt>'
+        "</gpx>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GpxReaderError, match="Invalid second"):
+        import_gpx(database, gpx_file, "Must not be created")
+
+    assert database.list_collections() == []
+    connection = database._connect()
+    try:
+        waypoint_count = connection.execute(
+            "SELECT COUNT(*) FROM waypoints"
+        ).fetchone()
+    finally:
+        connection.close()
     assert waypoint_count == (0,)

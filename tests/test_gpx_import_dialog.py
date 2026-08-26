@@ -3,10 +3,12 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from wpt_manager.database.database import Database
 from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
+from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.collection_merge import ConflictDecision
 from wpt_manager.models.waypoint import Waypoint
@@ -99,4 +101,29 @@ def test_merge_mode_analyzes_and_imports_into_target(tmp_path, monkeypatch):
     assert "Import completed." in messages[0]
 
     dialog.close()
+    application.processEvents()
+
+
+def test_invalid_gpx_cannot_modify_existing_collection(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    target = Collection(name="Existing")
+    database.save_collection(target)
+    existing = Waypoint(name="Existing point", latitude=50.0, longitude=14.0)
+    database.save_waypoint(existing, target.id)
+    gpx_file = tmp_path / "invalid_merge.gpx"
+    gpx_file.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">'
+        '<wpt lat="nan" lon="14"><name>Invalid import</name></wpt>'
+        "</gpx>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GpxReaderError, match="Invalid import"):
+        GpxImportDialog(database, gpx_file, target.id)
+
+    assert database.list_collections() == [target]
+    assert database.list_waypoints(target.id) == [existing]
     application.processEvents()

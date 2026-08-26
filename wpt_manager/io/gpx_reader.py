@@ -2,6 +2,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 from .exceptions import GpxReaderError
 
@@ -74,6 +75,18 @@ def load_gpx(path: str | Path) -> list[Waypoint]:
             )
             if color_element is not None and color_element.text is not None:
                 waypoint.color = color_element.text
+
+        validation_errors = validate_waypoint(waypoint)
+        if validation_errors:
+            waypoint_label = (
+                f'waypoint "{waypoint.name}"'
+                if waypoint.name
+                else "unnamed waypoint"
+            )
+            raise GpxReaderError(
+                f"Invalid {waypoint_label}: "
+                + " ".join(validation_errors)
+            )
 
         waypoints.append(waypoint)
 

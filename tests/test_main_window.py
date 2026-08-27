@@ -238,6 +238,7 @@ def test_map_window_shows_empty_search_results():
 
     assert window.search_results.count() == 0
     assert window.search_status.text() == "No results"
+    assert not window.add_search_result_button.isEnabled()
 
     window.close()
     application.processEvents()
@@ -432,8 +433,10 @@ def test_open_selected_search_result_uses_external_mapy_url(monkeypatch):
         entity_type="poi",
     )
     window._show_search_results([result])
+    assert not window.add_search_result_button.isEnabled()
     window.search_results.setCurrentRow(0)
 
+    assert window.add_search_result_button.isEnabled()
     window.open_search_result_button.click()
 
     assert opened_urls == [
@@ -441,6 +444,209 @@ def test_open_selected_search_result_uses_external_mapy_url(monkeypatch):
         "center=14.3952,50.0835&zoom=16&marker=true"
     ]
 
+    window.close()
+    application.processEvents()
+
+
+def test_add_search_result_saves_selects_and_updates_active_collection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    existing = Waypoint(name="Existing", latitude=49.0, longitude=13.0)
+    database.save_waypoint(existing, collection.id)
+    result = MapSearchResult(
+        name="Petřínská rozhledna",
+        label="Rozhledna",
+        latitude=50.0835,
+        longitude=14.3952,
+        location="Praha, Česko",
+    )
+    created = Waypoint(
+        name=result.name,
+        latitude=result.latitude,
+        longitude=result.longitude,
+        note=result.label,
+        comment=result.location or "",
+    )
+
+    class AcceptedWaypointDialog:
+        def __init__(
+            self,
+            latitude,
+            longitude,
+            icon_catalog,
+            collections,
+            selected_collection_id,
+            parent,
+            **initial_values,
+        ):
+            assert latitude == result.latitude
+            assert longitude == result.longitude
+            assert selected_collection_id == collection.id
+            assert collections == [(collection.id, "Places")]
+            assert initial_values == {
+                "name": result.name,
+                "note": result.label,
+                "comment": result.location,
+            }
+            assert parent.map_window is not None
+            assert parent.map_window._selected_search_result is result
+            assert parent._map_waypoints == [existing]
+            self.waypoint = created
+            self.collection_id = collection.id
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.NewWaypointDialog",
+        AcceptedWaypointDialog,
+    )
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+    assert window.map_window is not None
+    window.map_window._show_search_results([result])
+    window.map_window.search_results.setCurrentRow(0)
+    map_window = window.map_window
+    sync_calls = []
+    original_set_waypoints = map_window.set_waypoints
+    original_set_selected = map_window.set_selected_waypoint_ids
+    original_clear_search_marker = map_window.clear_search_result_marker
+    monkeypatch.setattr(
+        map_window,
+        "set_waypoints",
+        lambda waypoints, fit_viewport=True: (
+            sync_calls.append(("dataset", [item.id for item in waypoints])),
+            original_set_waypoints(waypoints, fit_viewport),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        map_window,
+        "set_selected_waypoint_ids",
+        lambda waypoint_ids: (
+            sync_calls.append(("selection", list(waypoint_ids))),
+            original_set_selected(waypoint_ids),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        map_window,
+        "clear_search_result_marker",
+        lambda: (
+            sync_calls.append(("clear-search", None)),
+            original_clear_search_marker(),
+        )[-1],
+    )
+
+    window.map_window.add_search_result_button.click()
+
+    stored = database.get_waypoint(created.id)
+    assert stored == created
+    assert stored.id == created.id
+    assert stored.id != existing.id
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == collection.id
+    assert window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == created.id
+    assert {waypoint.id for waypoint in window._map_waypoints} == {
+        existing.id,
+        created.id,
+    }
+    assert window.map_window.selected_waypoint_ids == [created.id]
+    assert window.map_window._selected_search_result is result
+    assert window.map_window.waypoint_map._search_result_payload is None
+    dataset_call = next(
+        index
+        for index, call in enumerate(sync_calls)
+        if call[0] == "dataset"
+        and set(call[1]) == {created.id, existing.id}
+    )
+    selection_call = next(
+        index
+        for index, call in enumerate(sync_calls)
+        if call == ("selection", [created.id])
+    )
+    clear_call = sync_calls.index(("clear-search", None))
+    assert dataset_call < selection_call < clear_call
+    assert window.map_window is map_window
+
+    window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_add_search_result_to_other_collection_keeps_active_collection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    active = Collection(name="Active")
+    target = Collection(name="Target")
+    database.save_collection(active)
+    database.save_collection(target)
+    existing = Waypoint(name="Existing", latitude=49.0, longitude=13.0)
+    database.save_waypoint(existing, active.id)
+    result = MapSearchResult("New", "Place", 50.0, 14.0)
+    created = Waypoint(name="New", latitude=50.0, longitude=14.0)
+    messages = []
+
+    class AcceptedWaypointDialog:
+        def __init__(self, *args, **kwargs):
+            assert args[4] == active.id
+            self.waypoint = created
+            self.collection_id = target.id
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.NewWaypointDialog",
+        AcceptedWaypointDialog,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: messages.append(args[2]),
+    )
+    window = MainWindow(database, icon_catalog=[])
+    for index in range(window.collection_list.count()):
+        item = window.collection_list.item(index)
+        if item.data(Qt.ItemDataRole.UserRole) == active.id:
+            window.collection_list.setCurrentItem(item)
+            break
+    window.open_map()
+    assert window.map_window is not None
+    map_payload_before = list(window.map_window.waypoint_map._waypoint_payload)
+    window.map_window._show_search_results([result])
+    window.map_window.search_results.setCurrentRow(0)
+    search_marker_before = dict(
+        window.map_window.waypoint_map._search_result_payload or {}
+    )
+
+    window.map_window.add_search_result_button.click()
+
+    assert database.list_waypoints(active.id) == [existing]
+    assert database.list_waypoints(target.id) == [created]
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == active.id
+    assert window._map_waypoints == [existing]
+    assert window.map_window.waypoint_map._waypoint_payload == map_payload_before
+    assert window.map_window.waypoint_map._search_result_payload == (
+        search_marker_before
+    )
+    assert messages == ['Waypoint was saved to collection "Target".']
+
+    window.map_window.close()
     window.close()
     application.processEvents()
 

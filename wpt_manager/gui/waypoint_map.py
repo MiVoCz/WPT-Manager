@@ -611,6 +611,11 @@ class WaypointMap(MapWebView):
         self._pending_search_result = True
         self._flush_pending_search_result()
 
+    def clear_search_result(self) -> None:
+        self._search_result_payload = None
+        self._pending_search_result = True
+        self._flush_pending_search_result()
+
     def _handle_load_finished(self, loaded: bool) -> None:
         self._page_loaded = loaded
         if not loaded:

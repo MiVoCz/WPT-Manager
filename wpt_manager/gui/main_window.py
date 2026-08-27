@@ -32,6 +32,7 @@ from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
+from wpt_manager.mapy_search import MapSearchResult
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.validation.waypoint_validator import validate_waypoint
@@ -274,6 +275,9 @@ class MainWindow(QMainWindow):
             self.map_window.add_waypoint_requested.connect(
                 self.add_waypoint_from_map
             )
+            self.map_window.add_search_result_requested.connect(
+                self.add_waypoint_from_search_result
+            )
             self.map_window.destroyed.connect(self._map_window_destroyed)
         self.map_window.set_waypoints(self._map_waypoints)
         self.map_window.set_selected_waypoint_ids(
@@ -350,6 +354,31 @@ class MainWindow(QMainWindow):
         latitude: float,
         longitude: float,
     ) -> None:
+        self.open_new_waypoint_dialog(latitude, longitude)
+
+    def add_waypoint_from_search_result(
+        self,
+        result: MapSearchResult,
+    ) -> None:
+        self.open_new_waypoint_dialog(
+            result.latitude,
+            result.longitude,
+            name=result.name,
+            note=result.label,
+            comment=result.location or "",
+            clear_search_marker_on_success=True,
+        )
+
+    def open_new_waypoint_dialog(
+        self,
+        latitude: float,
+        longitude: float,
+        *,
+        name: str = "",
+        note: str = "",
+        comment: str = "",
+        clear_search_marker_on_success: bool = False,
+    ) -> None:
         collections = [
             (
                 self.collection_list.item(index).data(
@@ -374,6 +403,13 @@ class MainWindow(QMainWindow):
             else None
         )
 
+        initial_values = {}
+        if name or note or comment:
+            initial_values = {
+                "name": name,
+                "note": note,
+                "comment": comment,
+            }
         dialog = NewWaypointDialog(
             latitude,
             longitude,
@@ -381,6 +417,7 @@ class MainWindow(QMainWindow):
             collections,
             selected_collection_id,
             parent=self,
+            **initial_values,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -409,10 +446,16 @@ class MainWindow(QMainWindow):
             active_collection_item is not None
             and collection_id == active_collection_id
         ):
-            self._reload_and_select_waypoint(
+            reloaded = self._reload_and_select_waypoint(
                 waypoint.id,
                 active_collection_item,
             )
+            if (
+                reloaded
+                and clear_search_marker_on_success
+                and self.map_window is not None
+            ):
+                self.map_window.clear_search_result_marker()
             return
 
         collection_name = next(
@@ -430,17 +473,18 @@ class MainWindow(QMainWindow):
         self,
         waypoint_id: UUID,
         collection_item: QListWidgetItem,
-    ) -> None:
+    ) -> bool:
         if not self.load_waypoints(
             collection_item,
             fit_map_viewport=False,
         ):
-            return
+            return False
         for index in range(self.waypoint_list.count()):
             item = self.waypoint_list.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == waypoint_id:
                 self.waypoint_list.setCurrentItem(item)
-                return
+                return True
+        return False
 
     def reload_sorted_waypoints(self) -> None:
         collection_item = self.collection_list.currentItem()

@@ -67,6 +67,7 @@ class MapWindow(QMainWindow):
     marker_clicked = Signal(object)
     map_clicked = Signal(float, float)
     add_waypoint_requested = Signal(float, float)
+    add_search_result_requested = Signal(object)
 
     def __init__(
         self,
@@ -154,6 +155,9 @@ class MapWindow(QMainWindow):
         self.search_client.error_occurred.connect(self._show_search_error)
         self.open_search_result_button.clicked.connect(
             self._open_search_result_in_mapy
+        )
+        self.add_search_result_button.clicked.connect(
+            self._request_add_search_result
         )
         search_available = self.search_client.is_available
         self.search_edit.setEnabled(search_available)
@@ -405,12 +409,17 @@ class MapWindow(QMainWindow):
         if current is None:
             self._selected_search_result = None
             self.open_search_result_button.setEnabled(False)
+            self.add_search_result_button.setEnabled(False)
             return
         result = current.data(Qt.ItemDataRole.UserRole)
         if not isinstance(result, MapSearchResult):
+            self._selected_search_result = None
+            self.open_search_result_button.setEnabled(False)
+            self.add_search_result_button.setEnabled(False)
             return
         self._selected_search_result = result
         self.open_search_result_button.setEnabled(True)
+        self.add_search_result_button.setEnabled(True)
         self.search_detail_labels["name"].setText(result.name)
         self.search_detail_labels["label"].setText(result.label)
         self.search_detail_labels["location"].setText(result.location or "")
@@ -435,6 +444,12 @@ class MapWindow(QMainWindow):
             build_mapy_show_url(result.latitude, result.longitude)
         )
 
+    @Slot()
+    def _request_add_search_result(self) -> None:
+        result = self._selected_search_result
+        if result is not None:
+            self.add_search_result_requested.emit(result)
+
     def set_waypoints(
         self,
         waypoints: list[Waypoint],
@@ -445,6 +460,9 @@ class MapWindow(QMainWindow):
     def set_selected_waypoint_ids(self, waypoint_ids: list[UUID]) -> None:
         self.selected_waypoint_ids = list(waypoint_ids)
         self.waypoint_map.set_selected_waypoint_ids(waypoint_ids)
+
+    def clear_search_result_marker(self) -> None:
+        self.waypoint_map.clear_search_result()
 
     @Slot()
     def _change_map_source(self) -> None:

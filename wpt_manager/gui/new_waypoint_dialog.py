@@ -26,6 +26,10 @@ class NewWaypointDialog(QDialog):
         collections: list[tuple[UUID, str]],
         selected_collection_id: UUID | None = None,
         parent: QWidget | None = None,
+        *,
+        name: str = "",
+        note: str = "",
+        comment: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add waypoint")
@@ -41,7 +45,13 @@ class NewWaypointDialog(QDialog):
         self.editor = WaypointEditor(icon_catalog)
         self.editor.setTitle("New waypoint")
         self.editor.show_waypoint(
-            Waypoint(name="", latitude=latitude, longitude=longitude)
+            Waypoint(
+                name=name,
+                latitude=latitude,
+                longitude=longitude,
+                note=note,
+                comment=comment,
+            )
         )
         self.editor.save_button.setText("Create")
         self.cancel_button = QPushButton("Cancel")

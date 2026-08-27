@@ -99,3 +99,30 @@ def test_new_waypoint_dialog_can_select_another_collection():
 
     dialog.close()
     application.processEvents()
+
+
+def test_new_waypoint_dialog_prefills_search_result_fields():
+    application = QApplication.instance() or QApplication([])
+    collection_id = uuid4()
+    dialog = NewWaypointDialog(
+        50.0835,
+        14.3952,
+        [],
+        [(collection_id, "Places")],
+        collection_id,
+        name="Petřínská rozhledna",
+        note="Rozhledna",
+        comment="Praha, Česko",
+    )
+
+    assert dialog.editor.name_edit.text() == "Petřínská rozhledna"
+    assert float(dialog.editor.latitude_edit.text()) == 50.0835
+    assert float(dialog.editor.longitude_edit.text()) == 14.3952
+    assert dialog.editor.latitude_edit.isReadOnly()
+    assert dialog.editor.longitude_edit.isReadOnly()
+    assert dialog.editor.note_edit.text() == "Rozhledna"
+    assert dialog.editor.comment_edit.toPlainText() == "Praha, Česko"
+    assert dialog.collection_combo.currentData() == collection_id
+
+    dialog.close()
+    application.processEvents()

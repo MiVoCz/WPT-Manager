@@ -287,6 +287,27 @@ def test_single_multi_and_cleared_marker_selection(monkeypatch):
     application.processEvents()
 
 
+def test_clear_search_result_removes_only_temporary_marker(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    waypoint_map = WaypointMap()
+    scripts = []
+    monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
+    waypoint_map._handle_load_finished(True)
+    waypoint_map._handle_map_ready()
+    waypoint_map._handle_first_visible_size()
+    waypoint_map.set_search_result("Place", 50.0, 14.0)
+    waypoint_payload = list(waypoint_map._waypoint_payload)
+
+    waypoint_map.clear_search_result()
+
+    assert scripts[-1] == "window.setSearchResult(null);"
+    assert waypoint_map._search_result_payload is None
+    assert waypoint_map._waypoint_payload == waypoint_payload
+
+    waypoint_map.close()
+    application.processEvents()
+
+
 def test_map_context_menu_passes_coordinates_and_requests_add(monkeypatch):
     application = QApplication.instance() or QApplication([])
     bridge = MapBridge()

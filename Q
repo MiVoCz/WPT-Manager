@@ -1,0 +1,169 @@
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/README.md b/README.md[m
+[1mindex 14cde94..79d75e6 100644[m
+[1m--- a/README.md[m
+[1m+++ b/README.md[m
+[36m@@ -1,9 +1,94 @@[m
+ # WPT-Manager[m
+ [m
+[31m-## Local map configuration[m
+[32m+[m[32mWPT-Manager is a desktop Python/PySide6 application for managing waypoints,[m
+[32m+[m[32mimporting GPX files exported by Mapy.com, editing their contents, and exporting[m
+[32m+[m[32mGPX files compatible with OsmAnd. Waypoints can also be created and managed[m
+[32m+[m[32mdirectly from the map.[m
+ [m
+[31m-Copy `data/config.example.json` to `data/config.json` and set your Mapy.com[m
+[31m-REST API key:[m
+[32m+[m[32m## Current features[m
+[32m+[m
+[32m+[m[32m### Collections[m
+[32m+[m
+[32m+[m[32m- Import a GPX file into a new Collection or merge it into an existing one.[m
+[32m+[m[32m- Create, rename, edit, delete, and alphabetically list Collections.[m
+[32m+[m[32m- Merge two Collections.[m
+[32m+[m[32m- Detect potential duplicates by geographic distance.[m
+[32m+[m[32m- Resolve merge conflicts with `KEEP_TARGET`, `USE_SOURCE`, or `KEEP_BOTH`.[m
+[32m+[m
+[32m+[m[32m### Waypoints[m
+[32m+[m
+[32m+[m[32m- Edit a single waypoint or select multiple waypoints.[m
+[32m+[m[32m- Bulk-edit icon, color, and background for a multi-selection.[m
+[32m+[m[32m- Delete one or multiple waypoints.[m
+[32m+[m[32m- Sort by name or date added.[m
+[32m+[m[32m- Store a short note and a detailed comment.[m
+[32m+[m[32m- Preserve UUID identity, icon, color, and background.[m
+[32m+[m[32m- Validate waypoint names, coordinates, and display values before saving.[m
+[32m+[m
+[32m+[m[32m### GPX[m
+[32m+[m
+[32m+[m[32m- Read and write GPX 1.1.[m
+[32m+[m[32m- Read and write OsmAnd `icon`, `color`, and `background` extensions.[m
+[32m+[m[32m- Map waypoint notes to GPX `desc` and comments to GPX `cmt`.[m
+[32m+[m[32m- Export a Collection as an OsmAnd-compatible GPX file.[m
+[32m+[m
+[32m+[m[32m### Icons[m
+[32m+[m
+[32m+[m[32m- Load a user-managed SVG catalog from `data/icons`.[m
+[32m+[m[32m- Group icons by directory, with `Favorites` shown first.[m
+[32m+[m[32m- Search and select icons with an SVG picker and preview.[m
+[32m+[m[32m- Preserve unknown icon names when editing and saving waypoints.[m
+[32m+[m
+[32m+[m[32m### Map[m
+[32m+[m
+[32m+[m[32m- Open a separate `MapWindow` on demand.[m
+[32m+[m[32m- Display the map with Leaflet.[m
+[32m+[m[32m- Choose Mapy.com Outdoor, Basic, or Aerial tiles, or OpenStreetMap.[m
+[32m+[m[32m- Load the Mapy.com API key from the local `data/config.json` file.[m
+[32m+[m[32m- Display the required Mapy.com or OpenStreetMap attribution.[m
+[32m+[m[32m- Render waypoint markers using their icon, color, and background.[m
+[32m+[m[32m- Synchronize waypoint selection between `MainWindow` and `MapWindow`.[m
+[32m+[m[32m- Create a waypoint by right-clicking the map and choose its target Collection.[m
+[32m+[m
+[32m+[m[32m### Mapy.com Search[m
+[32m+[m
+[32m+[m[32m- Search Mapy.com by text.[m
+[32m+[m[32m- Filter results by All, Places, POI, or Addresses.[m
+[32m+[m[32m- Search within the current map or near the selected waypoint.[m
+[32m+[m[32m- Use a configurable radius as the `preferNear` preference.[m
+[32m+[m[32m- Sort results by distance from the current map center or selected waypoint.[m
+[32m+[m[32m- Show a result marker, result details, and formatted distance.[m
+[32m+[m[32m- Open the selected result in Mapy.com.[m
+[32m+[m
+[32m+[m[32mSaving a Mapy.com search result directly as a waypoint is planned but is not[m
+[32m+[m[32mimplemented yet.[m
+[32m+[m
+[32m+[m[32m## Installation and development[m
+[32m+[m
+[32m+[m[32mWPT-Manager requires Python 3.14 or newer. On Windows, create a virtual[m
+[32m+[m[32menvironment and install the project in editable mode:[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32mpy -3.14 -m venv .venv[m
+[32m+[m[32m.\.venv\Scripts\python.exe -m pip install -e .[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mRun the application:[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32m.\.venv\Scripts\python.exe -m wpt_manager[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mRun the complete test suite:[m
+[32m+[m
+[32m+[m[32m```powershell[m
+[32m+[m[32m.\.venv\Scripts\python.exe -m pytest[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m## Configuration[m
+[32m+[m
+[32m+[m[32mCopy `data/config.example.json` to `data/config.json` and enter a Mapy.com REST[m
+[32m+[m[32mAPI key:[m
+ [m
+ ```json[m
+ {[m
+[36m@@ -11,5 +96,63 @@[m [mREST API key:[m
+ }[m
+ ```[m
+ [m
+[31m-`data/config.json` is ignored by Git and must remain local. Without the key,[m
+[31m-the map automatically uses OpenStreetMap.[m
+[32m+[m[32mNever commit a real API key. `data/config.json` is ignored by Git and must[m
+[32m+[m[32mremain local. Without a Mapy.com key, the application can still use[m
+[32m+[m[32mOpenStreetMap; Mapy.com map layers and search require the key.[m
+[32m+[m
+[32m+[m[32m## Icon catalog[m
+[32m+[m
+[32m+[m[32mThe catalog uses this layout:[m
+[32m+[m
+[32m+[m[32m```text[m
+[32m+[m[32mdata/icons/<group>/*.svg[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mThe directory name becomes the group name, and `Favorites` is treated as the[m
+[32m+[m[32mpreferred group. The icon name is derived from the SVG filename; an `mx_`[m
+[32m+[m[32mprefix is removed. Users maintain their own catalog—WPT-Manager does not[m
+[32m+[m[32mdistribute icons. Not every SVG from OsmAnd resources is necessarily usable as[m
+[32m+[m[32ma waypoint icon in OsmAnd.[m
+[32m+[m
+[32m+[m[32m## Data[m
+[32m+[m
+[32m+[m[32mApplication data is stored under `data/`. Collections and waypoints are stored[m
+[32m+[m[32min the SQLite database `data/wpt_manager.db`. The database uses explicit schema[m
+[32m+[m[32mversioning and UUIDs as stable identifiers for Collections and waypoints.[m
+[32m+[m
+[32m+[m[32m## Known issues[m
+[32m+[m
+[32m+[m[32m- On Windows with multiple monitors, the first change of a closed Search Type[m
+[32m+[m[32m  combobox after moving `MapWindow` may not repaint its displayed text[m
+[32m+[m[32m  immediately. The selected value and search state are still updated.[m
+[32m+[m[32m- Qt/Windows may print a benign `QWindowsWindow::setGeometry: Unable to set[m
+[32m+[m[32m  geometry` warning while `MapWindow` remains correctly usable.[m
+[32m+[m
+[32m+[m[32m## Roadmap[m
+[32m+[m
+[32m+[m[32m- Add a Mapy.com search result as a waypoint.[m
+[32m+[m[32m- Move an existing waypoint from the map.[m
+[32m+[m[32m- Add reverse geocoding when creating a waypoint.[m
+[32m+[m[32m- Add more map context actions.[m
+[32m+[m[32m- Improve the search user experience.[m
+[32m+[m
+[32m+[m[32m## Project structure[m
+[32m+[m
+[32m+[m[32m- `wpt_manager/models/` — Collection, waypoint, duplicate, merge, and icon data[m
+[32m+[m[32m  models.[m
+[32m+[m[32m- `wpt_manager/io/` — GPX import/export and icon catalog loading.[m
+[32m+[m[32m- `wpt_manager/validation/` — waypoint validation and geographic duplicate[m
+[32m+[m[32m  detection.[m
+[32m+[m[32m- `wpt_manager/database/` — SQLite persistence, migrations, and Collection[m
+[32m+[m[32m  merge operations.[m
+[32m+[m[32m- `wpt_manager/gui/` — PySide6 windows, dialogs, editors, map, and search UI.[m
+[32m+[m[32m- `tests/` — pytest test suite and test data.[m
+[32m+[m[32m- `data/` — local database, configuration, and user-managed icon catalog.[m
+[32m+[m
+[32m+[m[32m## License and third-party content[m
+[32m+[m
+[32m+[m[32mThis repository does not currently define its own license.[m
+[32m+[m
+[32m+[m[32mMapy.com map content is subject to Mapy.com's terms. OpenStreetMap attribution[m
+[32m+[m[32mmust be preserved. Users are responsible for the licensing and permitted use[m
+[32m+[m[32mof icons they place in `data/icons`.[m

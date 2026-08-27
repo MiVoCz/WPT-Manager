@@ -1,5 +1,15 @@
+from uuid import UUID
+
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QDialog, QMessageBox, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.models.icon import IconInfo
@@ -13,11 +23,21 @@ class NewWaypointDialog(QDialog):
         latitude: float,
         longitude: float,
         icon_catalog: list[IconInfo],
+        collections: list[tuple[UUID, str]],
+        selected_collection_id: UUID | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add waypoint")
         self.waypoint: Waypoint | None = None
+        self.collection_id: UUID | None = None
+        self.collection_combo = QComboBox()
+        for collection_id, collection_name in collections:
+            self.collection_combo.addItem(collection_name, collection_id)
+        selected_index = self.collection_combo.findData(selected_collection_id)
+        if selected_index >= 0:
+            self.collection_combo.setCurrentIndex(selected_index)
+
         self.editor = WaypointEditor(icon_catalog)
         self.editor.setTitle("New waypoint")
         self.editor.show_waypoint(
@@ -27,13 +47,27 @@ class NewWaypointDialog(QDialog):
         self.cancel_button = QPushButton("Cancel")
 
         layout = QVBoxLayout(self)
+        collection_layout = QFormLayout()
+        collection_layout.addRow("Collection:", self.collection_combo)
+        layout.addLayout(collection_layout)
         layout.addWidget(self.editor)
         layout.addWidget(self.cancel_button)
+
+        self.editor.save_button.setEnabled(bool(collections))
 
         self.editor.save_requested.connect(self._validate_and_accept)
         self.cancel_button.clicked.connect(self.reject)
 
     def _validate_and_accept(self) -> None:
+        collection_id = self.collection_combo.currentData()
+        if not isinstance(collection_id, UUID):
+            QMessageBox.warning(
+                self,
+                "Collection required",
+                "Select a collection for the waypoint.",
+            )
+            return
+
         values = self.editor.values()
         waypoint = Waypoint(
             name=values.name,
@@ -61,4 +95,5 @@ class NewWaypointDialog(QDialog):
 
         waypoint.color = color.name(QColor.NameFormat.HexRgb).upper()
         self.waypoint = waypoint
+        self.collection_id = collection_id
         self.accept()

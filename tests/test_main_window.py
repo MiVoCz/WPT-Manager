@@ -228,15 +228,13 @@ def test_main_window_loads_collection_without_open_map(tmp_path):
     application.processEvents()
 
 
-def test_add_waypoint_from_map_requires_selected_collection(
+def test_add_waypoint_from_map_requires_available_collection(
     tmp_path,
     monkeypatch,
 ):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()
-    collection = Collection(name="Places")
-    database.save_collection(collection)
     window = MainWindow(database, icon_catalog=[])
     messages = []
     monkeypatch.setattr(
@@ -247,8 +245,8 @@ def test_add_waypoint_from_map_requires_selected_collection(
 
     window.add_waypoint_from_map(50.123, 14.456)
 
-    assert database.list_waypoints(collection.id) == []
-    assert messages == ["Select a collection before adding a waypoint."]
+    assert window.collection_list.count() == 0
+    assert messages == ["Create a collection before adding a waypoint."]
 
     window.close()
     application.processEvents()
@@ -272,11 +270,22 @@ def test_add_waypoint_from_map_saves_selects_sorts_and_updates_map(
     )
 
     class AcceptedWaypointDialog:
-        def __init__(self, latitude, longitude, icon_catalog, parent):
+        def __init__(
+            self,
+            latitude,
+            longitude,
+            icon_catalog,
+            collections,
+            selected_collection_id,
+            parent,
+        ):
             assert latitude == 50.123
             assert longitude == 14.456
             assert icon_catalog == []
+            assert collections == [(collection.id, "Places")]
+            assert selected_collection_id == collection.id
             self.waypoint = created
+            self.collection_id = collection.id
 
         def exec(self):
             return QDialog.DialogCode.Accepted
@@ -318,6 +327,75 @@ def test_add_waypoint_from_map_saves_selects_sorts_and_updates_map(
     assert not window.map_window.waypoint_map._pending_fit_viewport
 
     window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_add_waypoint_from_map_saves_to_selected_duplicate_name_collection(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    active_collection = Collection(name="Places")
+    target_collection = Collection(name="Places")
+    database.save_collection(active_collection)
+    database.save_collection(target_collection)
+    existing = Waypoint(name="Existing", latitude=49.0, longitude=13.0)
+    database.save_waypoint(existing, active_collection.id)
+    created = Waypoint(name="Elsewhere", latitude=50.123, longitude=14.456)
+    messages = []
+
+    class AcceptedWaypointDialog:
+        def __init__(
+            self,
+            latitude,
+            longitude,
+            icon_catalog,
+            collections,
+            selected_collection_id,
+            parent,
+        ):
+            assert {
+                collection_id for collection_id, _ in collections
+            } == {active_collection.id, target_collection.id}
+            assert [name for _, name in collections] == ["Places", "Places"]
+            assert selected_collection_id == active_collection.id
+            self.waypoint = created
+            self.collection_id = target_collection.id
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.NewWaypointDialog",
+        AcceptedWaypointDialog,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: messages.append(args[2]),
+    )
+    window = MainWindow(database, icon_catalog=[])
+    for index in range(window.collection_list.count()):
+        item = window.collection_list.item(index)
+        if item.data(Qt.ItemDataRole.UserRole) == active_collection.id:
+            window.collection_list.setCurrentItem(item)
+            break
+    map_waypoints_before = list(window._map_waypoints)
+
+    window.add_waypoint_from_map(50.123, 14.456)
+
+    assert database.list_waypoints(active_collection.id) == [existing]
+    assert database.list_waypoints(target_collection.id) == [created]
+    assert window.collection_list.currentItem() is not None
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == active_collection.id
+    assert window._map_waypoints == map_waypoints_before
+    assert messages == ['Waypoint was saved to collection "Places".']
+
     window.close()
     application.processEvents()
 

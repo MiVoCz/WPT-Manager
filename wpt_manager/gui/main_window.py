@@ -327,28 +327,45 @@ class MainWindow(QMainWindow):
         latitude: float,
         longitude: float,
     ) -> None:
-        collection_item = self.collection_list.currentItem()
-        if collection_item is None:
+        collections = [
+            (
+                self.collection_list.item(index).data(
+                    Qt.ItemDataRole.UserRole
+                ),
+                self.collection_list.item(index).text(),
+            )
+            for index in range(self.collection_list.count())
+        ]
+        if not collections:
             QMessageBox.information(
                 self,
                 "Add waypoint",
-                "Select a collection before adding a waypoint.",
+                "Create a collection before adding a waypoint.",
             )
             return
+
+        collection_item = self.collection_list.currentItem()
+        selected_collection_id = (
+            collection_item.data(Qt.ItemDataRole.UserRole)
+            if collection_item is not None
+            else None
+        )
 
         dialog = NewWaypointDialog(
             latitude,
             longitude,
             self.icon_catalog,
-            self,
+            collections,
+            selected_collection_id,
+            parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         waypoint = dialog.waypoint
-        if waypoint is None:
+        collection_id = dialog.collection_id
+        if waypoint is None or collection_id is None:
             return
 
-        collection_id = collection_item.data(Qt.ItemDataRole.UserRole)
         try:
             self.database.save_waypoint(waypoint, collection_id)
         except (sqlite3.Error, ValueError) as exc:
@@ -359,7 +376,32 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._reload_and_select_waypoint(waypoint.id, collection_item)
+        active_collection_item = self.collection_list.currentItem()
+        active_collection_id = (
+            active_collection_item.data(Qt.ItemDataRole.UserRole)
+            if active_collection_item is not None
+            else None
+        )
+        if (
+            active_collection_item is not None
+            and collection_id == active_collection_id
+        ):
+            self._reload_and_select_waypoint(
+                waypoint.id,
+                active_collection_item,
+            )
+            return
+
+        collection_name = next(
+            name
+            for candidate_id, name in collections
+            if candidate_id == collection_id
+        )
+        QMessageBox.information(
+            self,
+            "Waypoint saved",
+            f'Waypoint was saved to collection "{collection_name}".',
+        )
 
     def _reload_and_select_waypoint(
         self,

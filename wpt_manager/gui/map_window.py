@@ -68,6 +68,10 @@ class MapWindow(QMainWindow):
     map_clicked = Signal(float, float)
     add_waypoint_requested = Signal(float, float)
     add_search_result_requested = Signal(object)
+    edit_waypoint_requested = Signal(object)
+    search_nearby_requested = Signal(object)
+    open_waypoint_in_mapy_requested = Signal(object)
+    delete_waypoint_requested = Signal(object)
 
     def __init__(
         self,
@@ -141,6 +145,9 @@ class MapWindow(QMainWindow):
         self.waypoint_map.map_clicked.connect(self.map_clicked)
         self.waypoint_map.map_context_menu_requested.connect(
             self._show_map_context_menu
+        )
+        self.waypoint_map.marker_context_menu_requested.connect(
+            self._show_marker_context_menu
         )
         self.waypoint_map.viewport_changed.connect(self._set_viewport_bbox)
         self.map_source_combo.currentIndexChanged.connect(
@@ -464,6 +471,13 @@ class MapWindow(QMainWindow):
     def clear_search_result_marker(self) -> None:
         self.waypoint_map.clear_search_result()
 
+    def prepare_search_near_waypoint(self, waypoint: Waypoint) -> None:
+        self.set_search_waypoint(waypoint)
+        self.search_area_combo.setCurrentIndex(
+            self.search_area_combo.findData("near-waypoint")
+        )
+        self.search_edit.setFocus()
+
     @Slot()
     def _change_map_source(self) -> None:
         source_id = self.map_source_combo.currentData()
@@ -501,6 +515,36 @@ class MapWindow(QMainWindow):
             lambda: self.add_waypoint_requested.emit(latitude, longitude)
         )
         self._map_context_menu = menu
+        menu.popup(self.waypoint_map.mapToGlobal(QPoint(x, y)))
+
+    @Slot(str, int, int)
+    def _show_marker_context_menu(
+        self,
+        waypoint_id: str,
+        x: int,
+        y: int,
+    ) -> None:
+        identifier = UUID(waypoint_id)
+        self.marker_clicked.emit(identifier)
+        menu = QMenu(self)
+        edit_action = menu.addAction("Edit waypoint")
+        search_action = menu.addAction("Search nearby")
+        open_action = menu.addAction("Open in Mapy.com")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete waypoint")
+        edit_action.triggered.connect(
+            lambda: self.edit_waypoint_requested.emit(identifier)
+        )
+        search_action.triggered.connect(
+            lambda: self.search_nearby_requested.emit(identifier)
+        )
+        open_action.triggered.connect(
+            lambda: self.open_waypoint_in_mapy_requested.emit(identifier)
+        )
+        delete_action.triggered.connect(
+            lambda: self.delete_waypoint_requested.emit(identifier)
+        )
+        self._marker_context_menu = menu
         menu.popup(self.waypoint_map.mapToGlobal(QPoint(x, y)))
 
     @Slot(str)

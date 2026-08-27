@@ -46,6 +46,8 @@ def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
     )
     assert "markerLayer.clearLayers()" in MAP_HTML
     assert "bridge.markerClicked(waypoint.id)" in MAP_HTML
+    assert "bridge.markerContextMenu(" in MAP_HTML
+    assert "L.DomEvent.stopPropagation(event.originalEvent)" in MAP_HTML
     assert "bridge.mapClicked" in MAP_HTML
     assert "map.invalidateSize(false)" in MAP_HTML
     assert "Map library failed to load" in MAP_HTML
@@ -334,6 +336,74 @@ def test_map_context_menu_passes_coordinates_and_requests_add(monkeypatch):
     map_window._map_context_menu.actions()[0].trigger()
 
     assert requested_coordinates == [(50.123, 14.456)]
+
+    map_window.close()
+    application.processEvents()
+
+
+def test_marker_context_menu_passes_uuid_selects_and_does_not_request_add(
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    waypoint_id = uuid4()
+    bridge = MapBridge()
+    bridge_requests = []
+    bridge.marker_context_menu_requested.connect(
+        lambda *values: bridge_requests.append(values)
+    )
+
+    bridge.markerContextMenu(str(waypoint_id), 120, 80)
+
+    assert bridge_requests == [(str(waypoint_id), 120, 80)]
+
+    from wpt_manager.config import ApplicationConfig
+    from wpt_manager.gui.map_window import MapWindow
+
+    monkeypatch.setattr(QMenu, "popup", lambda *args: None)
+    map_window = MapWindow(config=ApplicationConfig())
+    selected = []
+    add_requests = []
+    action_requests = []
+    map_window.marker_clicked.connect(selected.append)
+    map_window.add_waypoint_requested.connect(
+        lambda *values: add_requests.append(values)
+    )
+    map_window.edit_waypoint_requested.connect(
+        lambda value: action_requests.append(("edit", value))
+    )
+    map_window.search_nearby_requested.connect(
+        lambda value: action_requests.append(("search", value))
+    )
+    map_window.open_waypoint_in_mapy_requested.connect(
+        lambda value: action_requests.append(("open", value))
+    )
+    map_window.delete_waypoint_requested.connect(
+        lambda value: action_requests.append(("delete", value))
+    )
+
+    map_window._show_marker_context_menu(str(waypoint_id), 120, 80)
+
+    assert selected == [waypoint_id]
+    assert add_requests == []
+    actions = [
+        action
+        for action in map_window._marker_context_menu.actions()
+        if not action.isSeparator()
+    ]
+    assert [action.text() for action in actions] == [
+        "Edit waypoint",
+        "Search nearby",
+        "Open in Mapy.com",
+        "Delete waypoint",
+    ]
+    for action in actions:
+        action.trigger()
+    assert action_requests == [
+        ("edit", waypoint_id),
+        ("search", waypoint_id),
+        ("open", waypoint_id),
+        ("delete", waypoint_id),
+    ]
 
     map_window.close()
     application.processEvents()

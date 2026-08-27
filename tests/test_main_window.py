@@ -770,6 +770,152 @@ def test_selected_waypoint_updates_map_search_context(tmp_path):
     application.processEvents()
 
 
+def test_marker_context_actions_edit_search_and_open_waypoint(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Petřín",
+        latitude=50.0835,
+        longitude=14.3952,
+    )
+    database.save_waypoint(waypoint, collection.id)
+    opened_urls = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url.toString()) or True,
+    )
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+    assert window.map_window is not None
+
+    window.edit_waypoint_from_map(waypoint.id)
+
+    assert window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == waypoint.id
+    assert window.name_edit.text() == "Petřín"
+    assert window.map_window.selected_waypoint_ids == [waypoint.id]
+
+    window.map_window.search_edit.setText("parking")
+    window.search_near_waypoint_from_map(waypoint.id)
+
+    assert window.map_window.search_area_combo.currentData() == (
+        "near-waypoint"
+    )
+    assert window.map_window._search_waypoint_position == (
+        waypoint.latitude,
+        waypoint.longitude,
+    )
+    assert window.map_window.search_edit.text() == "parking"
+
+    window.open_waypoint_in_mapy(waypoint.id)
+
+    assert opened_urls == [
+        "https://mapy.com/fnc/v1/showmap?"
+        "center=14.3952,50.0835&zoom=16&marker=true"
+    ]
+
+    window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_edit_waypoint_from_map_restores_and_activates_main_window(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(name="Place", latitude=50.0, longitude=14.0)
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    calls = []
+    monkeypatch.setattr(window, "isMinimized", lambda: True)
+    monkeypatch.setattr(window, "showNormal", lambda: calls.append("normal"))
+    monkeypatch.setattr(window, "raise_", lambda: calls.append("raise"))
+    monkeypatch.setattr(
+        window,
+        "activateWindow",
+        lambda: calls.append("activate"),
+    )
+
+    window.edit_waypoint_from_map(waypoint.id)
+
+    assert window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == waypoint.id
+    assert calls == ["normal", "raise", "activate"]
+
+    window.close()
+    application.processEvents()
+
+
+def test_delete_waypoint_from_marker_cancel_and_confirm(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    waypoint = Waypoint(name="Delete me", latitude=50.0, longitude=14.0)
+    database.save_waypoint(waypoint, collection.id)
+    answers = iter(
+        [
+            QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        ]
+    )
+    prompts = []
+
+    def answer_question(*args):
+        prompts.append(args[2])
+        return next(answers)
+
+    monkeypatch.setattr(QMessageBox, "question", answer_question)
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+    assert window.map_window is not None
+    map_window = window.map_window
+
+    window.delete_waypoint_from_map(waypoint.id)
+
+    assert database.get_waypoint(waypoint.id) == waypoint
+    assert map_window.waypoint_map._waypoint_payload[0]["id"] == str(
+        waypoint.id
+    )
+
+    window.delete_waypoint_from_map(waypoint.id)
+
+    assert database.get_waypoint(waypoint.id) is None
+    assert window.waypoint_list.count() == 0
+    assert map_window.waypoint_map._waypoint_payload == []
+    assert not map_window.waypoint_map._pending_fit_viewport
+    assert window.map_window is map_window
+    assert prompts == [
+        'Delete waypoint "Delete me"?',
+        'Delete waypoint "Delete me"?',
+    ]
+
+    map_window.close()
+    window.close()
+    application.processEvents()
+
+
 def test_add_waypoint_from_map_requires_available_collection(
     tmp_path,
     monkeypatch,

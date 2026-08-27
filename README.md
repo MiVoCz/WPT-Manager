@@ -128,6 +128,17 @@ versioning and UUIDs as stable identifiers for Collections and waypoints.
 - Qt/Windows may print a benign `QWindowsWindow::setGeometry: Unable to set
   geometry` warning while `MapWindow` remains correctly usable.
 
+### Main window activation from MapWindow on Windows
+
+When **Edit waypoint** is selected from a marker context menu, the correct
+waypoint is selected in `MainWindow` and its editor is updated. If `MainWindow`
+is covered by a maximized `MapWindow`, however, Windows may not bring
+`MainWindow` to the foreground automatically. The user must switch to
+`MainWindow` manually in that case.
+
+This is a known Windows limitation affecting only activation and stacking of
+the top-level windows. Waypoint selection and editing are not affected.
+
 ## Roadmap
 
 - Add a Mapy.com search result as a waypoint.

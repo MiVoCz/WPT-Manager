@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import QItemSelectionModel, QSignalBlocker, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -32,7 +32,7 @@ from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
-from wpt_manager.mapy_search import MapSearchResult
+from wpt_manager.mapy_search import MapSearchResult, build_mapy_show_url
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.validation.waypoint_validator import validate_waypoint
@@ -278,6 +278,18 @@ class MainWindow(QMainWindow):
             self.map_window.add_search_result_requested.connect(
                 self.add_waypoint_from_search_result
             )
+            self.map_window.edit_waypoint_requested.connect(
+                self.edit_waypoint_from_map
+            )
+            self.map_window.search_nearby_requested.connect(
+                self.search_near_waypoint_from_map
+            )
+            self.map_window.open_waypoint_in_mapy_requested.connect(
+                self.open_waypoint_in_mapy
+            )
+            self.map_window.delete_waypoint_requested.connect(
+                self.delete_waypoint_from_map
+            )
             self.map_window.destroyed.connect(self._map_window_destroyed)
         self.map_window.set_waypoints(self._map_waypoints)
         self.map_window.set_selected_waypoint_ids(
@@ -346,8 +358,58 @@ class MainWindow(QMainWindow):
         for index in range(self.waypoint_list.count()):
             item = self.waypoint_list.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == waypoint_id:
-                self.waypoint_list.setCurrentItem(item)
+                self.waypoint_list.setCurrentItem(
+                    item,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect,
+                )
                 return
+
+    def _map_waypoint_by_id(self, waypoint_id: UUID) -> Waypoint | None:
+        return next(
+            (
+                waypoint
+                for waypoint in self._map_waypoints
+                if waypoint.id == waypoint_id
+            ),
+            None,
+        )
+
+    def edit_waypoint_from_map(self, waypoint_id: UUID) -> None:
+        self._select_waypoint_from_map(waypoint_id)
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        if self.waypoint_list.currentItem() is not None:
+            self.name_edit.setFocus()
+
+    def search_near_waypoint_from_map(self, waypoint_id: UUID) -> None:
+        waypoint = self._map_waypoint_by_id(waypoint_id)
+        if waypoint is None or self.map_window is None:
+            return
+        self._select_waypoint_from_map(waypoint_id)
+        self.map_window.prepare_search_near_waypoint(waypoint)
+
+    def open_waypoint_in_mapy(self, waypoint_id: UUID) -> None:
+        waypoint = self._map_waypoint_by_id(waypoint_id)
+        if waypoint is None:
+            return
+        QDesktopServices.openUrl(
+            build_mapy_show_url(waypoint.latitude, waypoint.longitude)
+        )
+
+    def delete_waypoint_from_map(self, waypoint_id: UUID) -> None:
+        waypoint = self._map_waypoint_by_id(waypoint_id)
+        if waypoint is None:
+            return
+        self._select_waypoint_from_map(waypoint_id)
+        self._confirm_and_delete_waypoints(
+            [waypoint_id],
+            f'Delete waypoint "{waypoint.name}"?',
+            fit_map_viewport=False,
+        )
 
     def add_waypoint_from_map(
         self,
@@ -588,10 +650,25 @@ class MainWindow(QMainWindow):
             return
 
         count = len(selected_items)
+        self._confirm_and_delete_waypoints(
+            [
+                item.data(Qt.ItemDataRole.UserRole)
+                for item in selected_items
+            ],
+            f"Delete {count} selected waypoint(s)?",
+        )
+
+    def _confirm_and_delete_waypoints(
+        self,
+        waypoint_ids: list[UUID],
+        confirmation_text: str,
+        *,
+        fit_map_viewport: bool = True,
+    ) -> None:
         answer = QMessageBox.question(
             self,
             "Delete waypoints",
-            f"Delete {count} selected waypoint(s)?",
+            confirmation_text,
             QMessageBox.StandardButton.Yes
             | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -600,12 +677,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.database.delete_waypoints(
-                [
-                    item.data(Qt.ItemDataRole.UserRole)
-                    for item in selected_items
-                ]
-            )
+            self.database.delete_waypoints(waypoint_ids)
         except sqlite3.Error as exc:
             QMessageBox.critical(
                 self,
@@ -616,7 +688,10 @@ class MainWindow(QMainWindow):
 
         collection_item = self.collection_list.currentItem()
         if collection_item is not None:
-            self.load_waypoints(collection_item)
+            self.load_waypoints(
+                collection_item,
+                fit_map_viewport=fit_map_viewport,
+            )
         else:
             self.waypoint_list.clear()
         self.clear_waypoint_editor()

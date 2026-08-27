@@ -339,6 +339,16 @@ MAP_HTML = """<!DOCTYPE html>
         marker.on("click", () => {
           if (bridge) bridge.markerClicked(waypoint.id);
         });
+        marker.on("contextmenu", event => {
+          if (!bridge) return;
+          event.originalEvent.preventDefault();
+          L.DomEvent.stopPropagation(event.originalEvent);
+          bridge.markerContextMenu(
+            waypoint.id,
+            event.originalEvent.clientX,
+            event.originalEvent.clientY
+          );
+        });
         marker.addTo(markerLayer);
         markersById.set(waypoint.id, marker);
         applyMarkerSelection(waypoint.id, marker);
@@ -384,6 +394,7 @@ MAP_HTML = """<!DOCTYPE html>
 
 class MapBridge(QObject):
     marker_clicked = Signal(str)
+    marker_context_menu_requested = Signal(str, int, int)
     map_clicked = Signal(float, float)
     map_context_menu_requested = Signal(float, float, int, int)
     map_ready = Signal()
@@ -396,6 +407,15 @@ class MapBridge(QObject):
     @Slot(str)
     def markerClicked(self, waypoint_id: str) -> None:
         self.marker_clicked.emit(waypoint_id)
+
+    @Slot(str, int, int)
+    def markerContextMenu(
+        self,
+        waypoint_id: str,
+        x: int,
+        y: int,
+    ) -> None:
+        self.marker_context_menu_requested.emit(waypoint_id, x, y)
 
     @Slot(float, float)
     def mapClicked(self, latitude: float, longitude: float) -> None:
@@ -475,6 +495,7 @@ class MapWebView(QWebEngineView):
 
 class WaypointMap(MapWebView):
     marker_clicked = Signal(str)
+    marker_context_menu_requested = Signal(str, int, int)
     map_clicked = Signal(float, float)
     map_context_menu_requested = Signal(float, float, int, int)
     console_message = Signal(str)
@@ -525,6 +546,9 @@ class WaypointMap(MapWebView):
         self.channel.registerObject("mapBridge", self.bridge)
         self.page().setWebChannel(self.channel)
         self.bridge.marker_clicked.connect(self.marker_clicked)
+        self.bridge.marker_context_menu_requested.connect(
+            self.marker_context_menu_requested
+        )
         self.bridge.map_clicked.connect(self.map_clicked)
         self.bridge.map_context_menu_requested.connect(
             self.map_context_menu_requested

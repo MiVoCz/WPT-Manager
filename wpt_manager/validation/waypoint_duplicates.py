@@ -34,15 +34,30 @@ def find_nearest_duplicate(
 
 
 def _geographic_distance_m(first: Waypoint, second: Waypoint) -> float:
-    first_latitude = radians(first.latitude)
-    second_latitude = radians(second.latitude)
-    latitude_delta = second_latitude - first_latitude
-    longitude_delta = radians(second.longitude - first.longitude)
+    return geographic_distance_m(
+        first.latitude,
+        first.longitude,
+        second.latitude,
+        second.longitude,
+    )
+
+
+def geographic_distance_m(
+    first_latitude: float,
+    first_longitude: float,
+    second_latitude: float,
+    second_longitude: float,
+) -> float:
+    """Return the great-circle distance between two coordinates in meters."""
+    first_latitude_rad = radians(first_latitude)
+    second_latitude_rad = radians(second_latitude)
+    latitude_delta = second_latitude_rad - first_latitude_rad
+    longitude_delta = radians(second_longitude - first_longitude)
 
     haversine = (
         sin(latitude_delta / 2) ** 2
-        + cos(first_latitude)
-        * cos(second_latitude)
+        + cos(first_latitude_rad)
+        * cos(second_latitude_rad)
         * sin(longitude_delta / 2) ** 2
     )
     angular_distance = 2 * asin(sqrt(haversine))

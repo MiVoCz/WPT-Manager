@@ -3,7 +3,7 @@ import logging
 from uuid import UUID
 
 from PySide6.QtCore import QObject, QEvent, Signal, Slot, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -119,6 +119,15 @@ MAP_HTML = """<!DOCTYPE html>
       object-fit: contain;
       pointer-events: none;
     }
+    .search-marker {
+      box-sizing: border-box;
+      width: 24px;
+      height: 24px;
+      border: 4px solid #FFFFFF;
+      border-radius: 50%;
+      background: #2563EB;
+      box-shadow: 0 0 0 3px #111827, 0 2px 7px rgba(0, 0, 0, 0.7);
+    }
   </style>
 </head>
 <body>
@@ -135,6 +144,8 @@ MAP_HTML = """<!DOCTYPE html>
     let map = null;
     let baseTileLayer = null;
     let markerLayer = null;
+    let searchMarkerLayer = null;
+    let searchMarker = null;
     let markersById = new Map();
     let selectedWaypointIds = new Set();
     let mapyLogoControl = null;
@@ -228,6 +239,7 @@ MAP_HTML = """<!DOCTYPE html>
       }
       map = L.map("map").setView(DEFAULT_CENTER, DEFAULT_ZOOM);
       markerLayer = L.layerGroup().addTo(map);
+      searchMarkerLayer = L.layerGroup().addTo(map);
       map.getContainer().addEventListener("click", event => {
         const target = event.target;
         const link = target instanceof Element
@@ -251,6 +263,18 @@ MAP_HTML = """<!DOCTYPE html>
           event.originalEvent.clientY
         );
       });
+      const reportViewport = () => {
+        if (!bridge) return;
+        const bounds = map.getBounds();
+        bridge.viewportChanged(
+          bounds.getWest(),
+          bounds.getSouth(),
+          bounds.getEast(),
+          bounds.getNorth()
+        );
+      };
+      map.on("moveend", reportViewport);
+      reportViewport();
       new ResizeObserver(() => {
         if (map) map.invalidateSize(false);
       }).observe(
@@ -327,6 +351,30 @@ MAP_HTML = """<!DOCTYPE html>
       }
     };
 
+    window.setSearchResult = function(result) {
+      if (!map || !searchMarkerLayer) return;
+      searchMarkerLayer.clearLayers();
+      searchMarker = null;
+      if (!result) return;
+      const shell = L.DomUtil.create("div", "search-marker");
+      const icon = L.divIcon({
+        className: "wpt-marker-icon",
+        html: shell,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+      searchMarker = L.marker(
+        [result.latitude, result.longitude],
+        {icon: icon, zIndexOffset: 2000}
+      );
+      searchMarker.bindTooltip(result.name);
+      searchMarker.addTo(searchMarkerLayer);
+      map.setView(
+        [result.latitude, result.longitude],
+        Math.max(map.getZoom(), 15)
+      );
+    };
+
     window.addEventListener("load", initializeMap);
   </script>
 </body>
@@ -339,6 +387,7 @@ class MapBridge(QObject):
     map_clicked = Signal(float, float)
     map_context_menu_requested = Signal(float, float, int, int)
     map_ready = Signal()
+    viewport_changed = Signal(float, float, float, float)
 
     @Slot()
     def mapReady(self) -> None:
@@ -361,6 +410,16 @@ class MapBridge(QObject):
         y: int,
     ) -> None:
         self.map_context_menu_requested.emit(latitude, longitude, x, y)
+
+    @Slot(float, float, float, float)
+    def viewportChanged(
+        self,
+        west: float,
+        south: float,
+        east: float,
+        north: float,
+    ) -> None:
+        self.viewport_changed.emit(west, south, east, north)
 
     @Slot(str)
     def openExternalUrl(self, url: str) -> None:
@@ -419,11 +478,13 @@ class WaypointMap(MapWebView):
     map_clicked = Signal(float, float)
     map_context_menu_requested = Signal(float, float, int, int)
     console_message = Signal(str)
+    viewport_changed = Signal(float, float, float, float)
 
     def __init__(
         self,
         initial_map_source: ResolvedMapSource | None = None,
         icon_data_urls: dict[str, str] | None = None,
+        web_profile: QWebEngineProfile | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -435,6 +496,7 @@ class WaypointMap(MapWebView):
         self._icon_data_urls = icon_data_urls or {}
         self._waypoint_payload: list[dict[str, str | float | None]] = []
         self._selected_waypoint_ids: list[str] = []
+        self._search_result_payload: dict[str, str | float] | None = None
         self._map_source_payload = self._source_payload(initial_map_source)
         self._page_loaded = False
         self._map_ready = False
@@ -444,13 +506,15 @@ class WaypointMap(MapWebView):
         self._pending_fit_viewport = True
         self._pending_selection = True
         self._pending_map_source = True
+        self._pending_search_result = False
+        self._web_engine_released = False
         self.console_messages: list[str] = []
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
         self.setMinimumSize(300, 300)
-        self.web_profile = QWebEngineProfile(self)
+        self.web_profile = web_profile or QWebEngineProfile(self)
         self.web_profile.setHttpUserAgent(
             "WPT-Manager/0.1 (PySide6 desktop application)"
         )
@@ -465,6 +529,7 @@ class WaypointMap(MapWebView):
         self.bridge.map_context_menu_requested.connect(
             self.map_context_menu_requested
         )
+        self.bridge.viewport_changed.connect(self.viewport_changed)
         self.bridge.map_ready.connect(self._handle_map_ready)
         self.web_page.console_message.connect(self._record_console_message)
         self.loadFinished.connect(self._handle_load_finished)
@@ -473,6 +538,25 @@ class WaypointMap(MapWebView):
         )
 
         self.setHtml(MAP_HTML, QUrl("https://localhost/"))
+
+    def release_web_engine(self) -> None:
+        if self._web_engine_released:
+            return
+        self._web_engine_released = True
+        self.stop()
+        profile = self.web_profile
+        page = self.web_page
+        page.destroyed.connect(profile.deleteLater)
+        replacement_page = QWebEnginePage(self)
+        self.setPage(replacement_page)
+        self.web_page = replacement_page
+        self.channel = None
+        self.web_profile = None
+        page.deleteLater()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self.release_web_engine()
+        super().closeEvent(event)
 
     @property
     def web_view(self) -> MapWebView:
@@ -513,6 +597,20 @@ class WaypointMap(MapWebView):
         self._pending_map_source = True
         self._flush_pending_map_source()
 
+    def set_search_result(
+        self,
+        name: str,
+        latitude: float,
+        longitude: float,
+    ) -> None:
+        self._search_result_payload = {
+            "name": name,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+        self._pending_search_result = True
+        self._flush_pending_search_result()
+
     def _handle_load_finished(self, loaded: bool) -> None:
         self._page_loaded = loaded
         if not loaded:
@@ -523,6 +621,7 @@ class WaypointMap(MapWebView):
         self._flush_pending_map_source()
         self._flush_pending_waypoints()
         self._flush_pending_selection()
+        self._flush_pending_search_result()
 
     def _handle_map_ready(self) -> None:
         self._map_ready = True
@@ -530,12 +629,14 @@ class WaypointMap(MapWebView):
         self._invalidate_initial_size_if_ready()
         self._flush_pending_waypoints()
         self._flush_pending_selection()
+        self._flush_pending_search_result()
 
     def _handle_first_visible_size(self) -> None:
         self._view_visible = True
         self._invalidate_initial_size_if_ready()
         self._flush_pending_waypoints()
         self._flush_pending_selection()
+        self._flush_pending_search_result()
 
     def _invalidate_initial_size_if_ready(self) -> None:
         if (
@@ -586,6 +687,18 @@ class WaypointMap(MapWebView):
         self._execute_javascript(f"window.setMapSource({payload});")
         self._pending_map_source = False
 
+    def _flush_pending_search_result(self) -> None:
+        if not (
+            self._pending_search_result
+            and self._page_loaded
+            and self._map_ready
+            and self._view_visible
+        ):
+            return
+        payload = json.dumps(self._search_result_payload, ensure_ascii=False)
+        self._execute_javascript(f"window.setSearchResult({payload});")
+        self._pending_search_result = False
+
     @staticmethod
     def _source_payload(source: ResolvedMapSource) -> dict[str, str | int | None]:
         return {
@@ -598,6 +711,8 @@ class WaypointMap(MapWebView):
         }
 
     def _execute_javascript(self, script: str) -> None:
+        if self._web_engine_released:
+            return
         self.web_page.runJavaScript(script)
 
     def _record_console_message(self, message: str) -> None:

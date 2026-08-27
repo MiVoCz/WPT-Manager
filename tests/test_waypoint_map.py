@@ -3,7 +3,9 @@ from uuid import uuid4
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import QApplication, QMenu
 
 from wpt_manager.gui.waypoint_map import MAP_HTML, MapBridge, WaypointMap
@@ -119,6 +121,38 @@ def test_empty_map_has_no_waypoint_payload():
     application.processEvents()
 
 
+def test_custom_page_is_released_before_custom_profile():
+    application = QApplication.instance() or QApplication([])
+    waypoint_map = WaypointMap()
+    custom_page = waypoint_map.web_page
+    custom_profile = waypoint_map.web_profile
+    destruction_order = []
+    custom_page.destroyed.connect(
+        lambda *_: destruction_order.append("page")
+    )
+    custom_profile.destroyed.connect(
+        lambda *_: destruction_order.append("profile")
+    )
+
+    assert custom_page.parent() is waypoint_map
+    assert custom_page.profile() is custom_profile
+
+    waypoint_map.release_web_engine()
+
+    assert waypoint_map._web_engine_released
+    assert waypoint_map.page() is not custom_page
+    assert waypoint_map.page().profile() is QWebEngineProfile.defaultProfile()
+    assert waypoint_map.web_profile is None
+
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert destruction_order == ["page", "profile"]
+
+    waypoint_map.release_web_engine()
+    waypoint_map.close()
+    application.processEvents()
+
+
 def test_changing_map_source_does_not_change_waypoint_dataset():
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
@@ -132,6 +166,40 @@ def test_changing_map_source_does_not_change_waypoint_dataset():
     assert waypoint_map._waypoint_payload == original_payload
     assert waypoint_map._pending_update
     assert waypoint_map._map_source_payload["id"] == "mapy-basic"
+
+    waypoint_map.close()
+    application.processEvents()
+
+
+def test_search_result_replaces_marker_without_changing_waypoints(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    waypoint_map = WaypointMap()
+    waypoint = Waypoint(name="Kept", latitude=50.0, longitude=14.0)
+    waypoint_map.set_waypoints([waypoint])
+    original_payload = list(waypoint_map._waypoint_payload)
+    scripts = []
+    monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
+    waypoint_map._handle_load_finished(True)
+    waypoint_map._handle_map_ready()
+    waypoint_map._handle_first_visible_size()
+
+    waypoint_map.set_search_result("First", 50.1, 14.1)
+    first_script = scripts[-1]
+    waypoint_map.set_search_result("Second", 50.2, 14.2)
+    second_script = scripts[-1]
+
+    assert first_script.startswith("window.setSearchResult(")
+    assert '"name": "First"' in first_script
+    assert second_script.startswith("window.setSearchResult(")
+    assert '"name": "Second"' in second_script
+    assert waypoint_map._search_result_payload == {
+        "name": "Second",
+        "latitude": 50.2,
+        "longitude": 14.2,
+    }
+    assert waypoint_map._waypoint_payload == original_payload
+    assert "searchMarkerLayer.clearLayers()" in MAP_HTML
+    assert "Math.max(map.getZoom(), 15)" in MAP_HTML
 
     waypoint_map.close()
     application.processEvents()

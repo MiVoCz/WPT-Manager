@@ -5,8 +5,8 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import QObject, Signal, Qt
+from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -14,9 +14,12 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDialog,
+    QDockWidget,
     QFileDialog,
     QLineEdit,
     QMessageBox,
+    QSizePolicy,
+    QSplitter,
     QTextEdit,
 )
 
@@ -24,16 +27,33 @@ from wpt_manager.database.database import Database
 from wpt_manager.database.collection_merge import merge_collections
 from wpt_manager.config import ApplicationConfig
 from wpt_manager.gui.main_window import MainWindow
-from wpt_manager.gui.map_window import MapWindow
+from wpt_manager.gui.map_window import MapWindow, format_distance_m
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_reader import load_gpx
 from wpt_manager.io.gpx_importer import import_gpx
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.mapy_search import MapSearchResult
 
 
 TEST_DATA = Path(__file__).parent / "data" / "mapy_export.gpx"
+
+
+class FakeSearchClient(QObject):
+    results_ready = Signal(list)
+    error_occurred = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    @property
+    def is_available(self):
+        return True
+
+    def search(self, query, **options):
+        self.calls.append((query, options))
 
 
 def test_main_window_defaults(tmp_path):
@@ -132,15 +152,16 @@ def test_closed_map_window_can_be_opened_again(tmp_path):
     map_window.close()
     application.processEvents()
 
-    assert not map_window.isVisible()
+    assert window.map_window is None
     assert window.load_collections()
 
     window.open_map()
 
-    assert window.map_window is map_window
-    assert map_window.isVisible()
+    assert window.map_window is not None
+    assert window.map_window is not map_window
+    assert window.map_window.isVisible()
 
-    map_window.close()
+    window.map_window.close()
     window.close()
     application.processEvents()
 
@@ -156,6 +177,9 @@ def test_map_window_defaults_and_fallback_follow_api_key_configuration():
     assert "API key is not configured" in without_key.map_source_status.text()
     assert with_key.map_source_combo.currentData() == "mapy-outdoor"
     assert with_key.map_source_status.text() == ""
+    assert not without_key.search_button.isEnabled()
+    assert "requires a configured API key" in without_key.search_status.text()
+    assert with_key.search_button.isEnabled()
 
     mapy_basic_index = without_key.map_source_combo.findData("mapy-basic")
     without_key.map_source_combo.setCurrentIndex(mapy_basic_index)
@@ -167,6 +191,277 @@ def test_map_window_defaults_and_fallback_follow_api_key_configuration():
 
     without_key.close()
     with_key.close()
+    application.processEvents()
+
+
+def test_map_window_search_panel_is_regular_child_in_central_splitter():
+    application = QApplication.instance() or QApplication([])
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key")
+    )
+
+    central_widget = window.centralWidget()
+    splitters = central_widget.findChildren(
+        QSplitter,
+        options=Qt.FindChildOption.FindDirectChildrenOnly,
+    )
+
+    assert len(splitters) == 1
+    splitter = splitters[0]
+    assert splitter.count() == 2
+    assert splitter.widget(0) is window.waypoint_map
+    assert window.waypoint_map.parentWidget() is splitter
+    assert splitter.widget(1).isAncestorOf(window.search_type_combo)
+    assert splitter.widget(1).minimumWidth() == 280
+    assert window.search_type_combo.window() is window
+    assert window.findChildren(QDockWidget) == []
+    assert window.waypoint_map.sizePolicy().horizontalPolicy() == (
+        QSizePolicy.Policy.Expanding
+    )
+    assert window.waypoint_map.sizePolicy().verticalPolicy() == (
+        QSizePolicy.Policy.Expanding
+    )
+    assert window.waypoint_map.minimumSize().width() == 300
+    assert window.waypoint_map.minimumSize().height() == 300
+
+    window.close()
+    application.processEvents()
+
+
+def test_map_window_shows_empty_search_results():
+    application = QApplication.instance() or QApplication([])
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key")
+    )
+
+    window._show_search_results([])
+
+    assert window.search_results.count() == 0
+    assert window.search_status.text() == "No results"
+
+    window.close()
+    application.processEvents()
+
+
+def test_map_window_near_search_uses_selected_waypoint_and_radius():
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+    waypoint = Waypoint(name="Anchor", latitude=50.123, longitude=14.456)
+    window.set_search_waypoint(waypoint)
+    window.search_type_combo.setCurrentIndex(
+        window.search_type_combo.findText("POI")
+    )
+    window.search_area_combo.setCurrentIndex(
+        window.search_area_combo.findData("near-waypoint")
+    )
+    window.search_radius_combo.setCurrentIndex(
+        window.search_radius_combo.findData(10_000)
+    )
+    window.search_edit.setText("restaurant")
+
+    window._start_search()
+
+    assert search_client.calls == [
+        (
+            "restaurant",
+            {
+                "result_types": ("poi",),
+                "prefer_near": (14.456, 50.123),
+                "prefer_near_precision": 10_000,
+            },
+        )
+    ]
+    assert "preference" in window.search_status.text()
+
+    window.close()
+    application.processEvents()
+
+
+def test_search_results_are_sorted_by_distance_from_map_center():
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+    window._set_viewport_bbox(13.0, 49.0, 15.0, 51.0)
+    window.search_edit.setText("places")
+    window._start_search()
+
+    window._show_search_results(
+        [
+            MapSearchResult("Far", "Place", 50.1, 14.0),
+            MapSearchResult("Near", "Place", 50.01, 14.0),
+        ]
+    )
+
+    assert [
+        window.search_results.item(index).data(Qt.ItemDataRole.UserRole).name
+        for index in range(window.search_results.count())
+    ] == ["Near", "Far"]
+
+    window.close()
+    application.processEvents()
+
+
+def test_search_results_are_sorted_by_distance_from_selected_waypoint():
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+    window.set_search_waypoint(
+        Waypoint(name="Anchor", latitude=49.0, longitude=13.0)
+    )
+    window.search_area_combo.setCurrentIndex(
+        window.search_area_combo.findData("near-waypoint")
+    )
+    window.search_edit.setText("places")
+    window._start_search()
+
+    window._show_search_results(
+        [
+            MapSearchResult("Map center", "Place", 50.0, 14.0),
+            MapSearchResult("Waypoint", "Place", 49.01, 13.0),
+        ]
+    )
+
+    first_result = window.search_results.item(0).data(
+        Qt.ItemDataRole.UserRole
+    )
+    assert first_result.name == "Waypoint"
+    assert first_result.distance_m is not None
+
+    window.close()
+    application.processEvents()
+
+
+@pytest.mark.parametrize(
+    ("distance_m", "formatted"),
+    [(320.4, "320 m"), (1_400.0, "1.4 km"), (12_700.0, "12.7 km")],
+)
+def test_search_result_distance_format(distance_m, formatted):
+    assert format_distance_m(distance_m) == formatted
+
+
+def test_equidistant_search_results_are_sorted_deterministically_by_name():
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+    window._set_viewport_bbox(13.0, 49.0, 15.0, 51.0)
+    window.search_edit.setText("places")
+    window._start_search()
+
+    window._show_search_results(
+        [
+            MapSearchResult("Zulu", "Place", 50.01, 14.0),
+            MapSearchResult("Alpha", "Place", 50.01, 14.0),
+        ]
+    )
+
+    assert [
+        window.search_results.item(index).data(Qt.ItemDataRole.UserRole).name
+        for index in range(window.search_results.count())
+    ] == ["Alpha", "Zulu"]
+
+    window.close()
+    application.processEvents()
+
+
+def test_search_type_change_updates_immediately_and_is_used():
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+    places_index = window.search_type_combo.findText("Places")
+    window.show()
+    application.processEvents()
+    initial_render = window.search_type_combo.grab().toImage()
+
+    window.search_type_combo.setCurrentIndex(places_index)
+    application.processEvents()
+
+    assert window.search_type_combo.currentText() == "Places"
+    assert window.search_type_combo.grab().toImage() != initial_render
+    assert window._search_result_types == (
+        "regional.municipality",
+        "regional.municipality_part",
+    )
+
+    window.search_edit.setText("Hatě")
+    window._start_search()
+
+    assert search_client.calls[0][1]["result_types"] == (
+        "regional.municipality",
+        "regional.municipality_part",
+    )
+
+    window.close()
+    application.processEvents()
+
+
+def test_open_selected_search_result_uses_external_mapy_url(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+    opened_urls = []
+    monkeypatch.setattr(
+        QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url.toString()) or True,
+    )
+    result = MapSearchResult(
+        name="Petřínská rozhledna",
+        label="Rozhledna",
+        latitude=50.0835,
+        longitude=14.3952,
+        location="Praha, Česko",
+        entity_type="poi",
+    )
+    window._show_search_results([result])
+    window.search_results.setCurrentRow(0)
+
+    window.open_search_result_button.click()
+
+    assert opened_urls == [
+        "https://mapy.com/fnc/v1/showmap?"
+        "center=14.3952,50.0835&zoom=16&marker=true"
+    ]
+
+    window.close()
+    application.processEvents()
+
+
+def test_map_window_near_search_requires_selected_waypoint():
+    application = QApplication.instance() or QApplication([])
+    search_client = FakeSearchClient()
+    window = MapWindow(
+        config=ApplicationConfig(mapy_api_key="configured-key"),
+        search_client=search_client,
+    )
+
+    window.search_area_combo.setCurrentIndex(
+        window.search_area_combo.findData("near-waypoint")
+    )
+
+    assert window.search_area_combo.currentData() == "current-map"
+    assert "Select one waypoint" in window.search_status.text()
+    assert search_client.calls == []
+
+    window.close()
     application.processEvents()
 
 
@@ -224,6 +519,47 @@ def test_main_window_loads_collection_without_open_map(tmp_path):
     assert window._map_waypoints == [waypoint]
     assert window._selected_waypoint_ids == [waypoint.id]
 
+    window.close()
+    application.processEvents()
+
+
+def test_selected_waypoint_updates_map_search_context(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Places")
+    database.save_collection(collection)
+    first = Waypoint(name="First", latitude=50.1, longitude=14.1)
+    second = Waypoint(name="Second", latitude=50.2, longitude=14.2)
+    database.save_waypoint(first, collection.id)
+    database.save_waypoint(second, collection.id)
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+    assert window.map_window is not None
+
+    window.waypoint_list.setCurrentRow(0)
+    first_item_id = window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    )
+    expected_first = first if first.id == first_item_id else second
+    assert window.map_window._search_waypoint_position == (
+        expected_first.latitude,
+        expected_first.longitude,
+    )
+
+    window.waypoint_list.setCurrentRow(1)
+    second_item_id = window.waypoint_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    )
+    expected_second = first if first.id == second_item_id else second
+    assert expected_second.id != expected_first.id
+    assert window.map_window._search_waypoint_position == (
+        expected_second.latitude,
+        expected_second.longitude,
+    )
+
+    window.map_window.close()
     window.close()
     application.processEvents()
 

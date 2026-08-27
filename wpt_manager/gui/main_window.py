@@ -274,13 +274,20 @@ class MainWindow(QMainWindow):
             self.map_window.add_waypoint_requested.connect(
                 self.add_waypoint_from_map
             )
+            self.map_window.destroyed.connect(self._map_window_destroyed)
         self.map_window.set_waypoints(self._map_waypoints)
         self.map_window.set_selected_waypoint_ids(
             self._selected_waypoint_ids
         )
+        self.map_window.set_search_waypoint(
+            self._selected_search_waypoint()
+        )
         self.map_window.show()
         self.map_window.raise_()
         self.map_window.activateWindow()
+
+    def _map_window_destroyed(self) -> None:
+        self.map_window = None
 
     def _set_map_waypoints(
         self,
@@ -314,6 +321,22 @@ class MainWindow(QMainWindow):
             self.map_window.set_selected_waypoint_ids(
                 self._selected_waypoint_ids
             )
+            self.map_window.set_search_waypoint(
+                self._selected_search_waypoint()
+            )
+
+    def _selected_search_waypoint(self) -> Waypoint | None:
+        if len(self._selected_waypoint_ids) != 1:
+            return None
+        selected_id = self._selected_waypoint_ids[0]
+        return next(
+            (
+                waypoint
+                for waypoint in self._map_waypoints
+                if waypoint.id == selected_id
+            ),
+            None,
+        )
 
     def _select_waypoint_from_map(self, waypoint_id: UUID) -> None:
         for index in range(self.waypoint_list.count()):

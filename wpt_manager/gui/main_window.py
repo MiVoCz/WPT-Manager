@@ -34,9 +34,11 @@ from PySide6.QtWidgets import (
 from wpt_manager.database.database import Database
 from wpt_manager.config import load_application_config
 from wpt_manager.gui.collection_edit_dialog import CollectionEditDialog
+from wpt_manager.gui.collection_create_dialog import CollectionCreateDialog
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
 from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
 from wpt_manager.gui.map_window import MapWindow
+from wpt_manager.gui.move_waypoints_dialog import MoveWaypointsDialog
 from wpt_manager.gui.new_waypoint_dialog import NewWaypointDialog
 from wpt_manager.gui.user_data_folder_dialog import UserDataFolderDialog
 from wpt_manager.gui.theme import install_native_title_bar_theming
@@ -52,6 +54,7 @@ from wpt_manager.io.user_data import (
 )
 from wpt_manager.mapy_search import MapSearchResult, build_mapy_show_url
 from wpt_manager.models.icon import IconInfo
+from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.paths import create_application_settings, store_user_data_directory
 from wpt_manager.validation.waypoint_validator import validate_waypoint
@@ -97,6 +100,7 @@ class MainWindow(QMainWindow):
         self.resize(1000, 700)
 
         self.collection_list = QListWidget()
+        self.new_collection_button = QPushButton("New Collection")
         self.import_button = QPushButton("Import GPX")
         self.export_button = QPushButton("Export GPX")
         self.export_button.setEnabled(False)
@@ -113,6 +117,7 @@ class MainWindow(QMainWindow):
         collection_layout.addWidget(self.collection_list)
 
         collection_buttons = QHBoxLayout()
+        collection_buttons.addWidget(self.new_collection_button)
         collection_buttons.addWidget(self.import_button)
         collection_buttons.addWidget(self.export_button)
         collection_buttons.addWidget(self.edit_collection_button)
@@ -130,11 +135,14 @@ class MainWindow(QMainWindow):
         self.waypoint_sort_combo.addItem("Added", "created_at")
         self.delete_waypoints_button = QPushButton("Delete Waypoint(s)")
         self.delete_waypoints_button.setEnabled(False)
+        self.move_waypoints_button = QPushButton("Move to Collection...")
+        self.move_waypoints_button.setEnabled(False)
 
         waypoint_panel = QGroupBox("Waypoints")
         waypoint_layout = QVBoxLayout(waypoint_panel)
         waypoint_layout.addWidget(self.waypoint_sort_combo)
         waypoint_layout.addWidget(self.waypoint_list)
+        waypoint_layout.addWidget(self.move_waypoints_button)
         waypoint_layout.addWidget(self.delete_waypoints_button)
 
         self.waypoint_editor = WaypointEditor(self.icon_catalog)
@@ -177,6 +185,7 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.main_splitter)
         self.setCentralWidget(central_widget)
 
+        self.new_collection_button.clicked.connect(self.create_collection)
         self.import_button.clicked.connect(self.import_gpx_file)
         self.delete_collection_button.clicked.connect(
             self.delete_collection
@@ -195,12 +204,39 @@ class MainWindow(QMainWindow):
         self.delete_waypoints_button.clicked.connect(
             self.delete_selected_waypoints
         )
+        self.move_waypoints_button.clicked.connect(
+            self.move_selected_waypoints
+        )
         self.waypoint_sort_combo.currentIndexChanged.connect(
             self.reload_sorted_waypoints
         )
         self.waypoint_editor.save_requested.connect(self.save_waypoint)
         self.export_button.clicked.connect(self.export_gpx_file)
         self.load_collections()
+
+    def create_collection(self) -> None:
+        dialog = CollectionCreateDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        name = dialog.collection_name
+        if not name:
+            QMessageBox.warning(
+                self,
+                "New Collection",
+                "Collection name cannot be empty.",
+            )
+            return
+        collection = Collection(name=name)
+        try:
+            self.database.save_collection(collection)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "New Collection failed",
+                f"The Collection could not be created:\n{exc}",
+            )
+            return
+        self.reload_and_select_collection(collection.id)
 
     def change_user_data_folder(self) -> None:
         dialog = UserDataFolderDialog(self.user_data_directory, self)
@@ -345,6 +381,7 @@ class MainWindow(QMainWindow):
             self.delete_collection_button.setEnabled(False)
             self.edit_collection_button.setEnabled(False)
             self.merge_collections_button.setEnabled(False)
+            self.move_waypoints_button.setEnabled(False)
             QMessageBox.critical(
                 self,
                 "Load Collections failed",
@@ -360,6 +397,7 @@ class MainWindow(QMainWindow):
         self.merge_collections_button.setEnabled(
             self.collection_list.count() >= 2
         )
+        self._update_move_waypoints_button()
         return True
 
     def open_merge_dialog(self) -> None:
@@ -860,6 +898,7 @@ class MainWindow(QMainWindow):
         selected_items = self.waypoint_list.selectedItems()
         self._sync_map_selection()
         self.delete_waypoints_button.setEnabled(bool(selected_items))
+        self._update_move_waypoints_button()
         self.clear_waypoint_editor()
 
         if len(selected_items) == 1:
@@ -887,6 +926,71 @@ class MainWindow(QMainWindow):
             return
 
         self.waypoint_editor.set_bulk_fields_enabled(False)
+
+    def _update_move_waypoints_button(self) -> None:
+        self.move_waypoints_button.setEnabled(
+            bool(self.waypoint_list.selectedItems())
+            and self.collection_list.count() > 1
+        )
+
+    def move_selected_waypoints(self) -> None:
+        selected_items = self.waypoint_list.selectedItems()
+        source_item = self.collection_list.currentItem()
+        if not selected_items or source_item is None:
+            return
+        source_id = source_item.data(Qt.ItemDataRole.UserRole)
+        try:
+            targets = [
+                collection
+                for collection in self.database.list_collections()
+                if collection.id != source_id
+            ]
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Move Waypoints failed",
+                f"Collections could not be loaded:\n{exc}",
+            )
+            return
+        if not targets:
+            QMessageBox.information(
+                self,
+                "Move Waypoints",
+                "Create another Collection before moving Waypoints.",
+            )
+            self._update_move_waypoints_button()
+            return
+
+        dialog = MoveWaypointsDialog(len(selected_items), targets, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        target_id = dialog.target_collection_id
+        if target_id is None:
+            return
+        waypoint_ids = [
+            item.data(Qt.ItemDataRole.UserRole) for item in selected_items
+        ]
+        try:
+            self.database.move_waypoints(waypoint_ids, target_id)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Move Waypoints failed",
+                f"The Waypoint(s) could not be moved:\n{exc}",
+            )
+            return
+
+        self.load_waypoints(source_item, fit_map_viewport=False)
+        target_name = next(
+            collection.name
+            for collection in targets
+            if collection.id == target_id
+        )
+        QMessageBox.information(
+            self,
+            "Move Waypoints",
+            f"{len(waypoint_ids)} waypoint(s) moved to {target_name}",
+        )
 
     def delete_selected_waypoints(self) -> None:
         selected_items = self.waypoint_list.selectedItems()

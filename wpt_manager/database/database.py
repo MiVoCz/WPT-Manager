@@ -418,6 +418,75 @@ class Database:
         finally:
             connection.close()
 
+    def move_waypoints(
+        self,
+        waypoint_ids: list[UUID],
+        target_collection_id: UUID,
+    ) -> None:
+        unique_ids = list(dict.fromkeys(waypoint_ids))
+        if not unique_ids:
+            return
+        connection = self._connect()
+        try:
+            target_exists = connection.execute(
+                "SELECT 1 FROM collections WHERE id = ?",
+                (str(target_collection_id),),
+            ).fetchone()
+            if target_exists is None:
+                raise ValueError(
+                    f"Target Collection does not exist: {target_collection_id}"
+                )
+
+            placeholders = ", ".join("?" for _ in unique_ids)
+            rows = connection.execute(
+                f"SELECT id, collection_id FROM waypoints "
+                f"WHERE id IN ({placeholders})",  # nosec B608
+                tuple(str(waypoint_id) for waypoint_id in unique_ids),
+            ).fetchall()
+            collections_by_waypoint = {
+                UUID(waypoint_id): UUID(collection_id)
+                for waypoint_id, collection_id in rows
+            }
+            missing_ids = [
+                waypoint_id
+                for waypoint_id in unique_ids
+                if waypoint_id not in collections_by_waypoint
+            ]
+            if missing_ids:
+                raise ValueError(f"Waypoint does not exist: {missing_ids[0]}")
+            if any(
+                source_id == target_collection_id
+                for source_id in collections_by_waypoint.values()
+            ):
+                raise ValueError(
+                    "Target Collection must differ from the source Collection."
+                )
+
+            source_ids = set(collections_by_waypoint.values())
+            source_placeholders = ", ".join("?" for _ in source_ids)
+            source_count = connection.execute(
+                f"SELECT COUNT(*) FROM collections "
+                f"WHERE id IN ({source_placeholders})",  # nosec B608
+                tuple(str(source_id) for source_id in source_ids),
+            ).fetchone()[0]
+            if source_count != len(source_ids):
+                raise ValueError("Source Collection does not exist.")
+
+            connection.execute(
+                f"UPDATE waypoints SET collection_id = ? "
+                f"WHERE id IN ({placeholders})",  # nosec B608
+                (
+                    str(target_collection_id),
+                    *(str(waypoint_id) for waypoint_id in unique_ids),
+                ),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     @staticmethod
     def _update_waypoint(
         connection: sqlite3.Connection,

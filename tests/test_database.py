@@ -469,6 +469,69 @@ def test_update_missing_waypoint_fails(tmp_path):
         database.update_waypoint(waypoint)
 
 
+def test_move_waypoints_preserves_uuid_and_all_metadata(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source = Collection(name="Source")
+    target = Collection(name="Target")
+    database.save_collection(source)
+    database.save_collection(target)
+    waypoints = [
+        Waypoint(
+            name="Alpha",
+            latitude=46.1,
+            longitude=10.2,
+            icon="peak",
+            color="#123456",
+            background="octagon",
+            note="Note",
+            comment="Comment",
+        ),
+        Waypoint(name="Bravo", latitude=47.1, longitude=11.2),
+    ]
+    for waypoint in waypoints:
+        database.save_waypoint(waypoint, source.id)
+
+    database.move_waypoints([waypoint.id for waypoint in waypoints], target.id)
+
+    assert database.list_waypoints(source.id) == []
+    assert database.list_waypoints(target.id) == waypoints
+    assert database.get_waypoint(waypoints[0].id) == waypoints[0]
+
+
+def test_move_waypoints_missing_waypoint_rolls_back_all(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source = Collection(name="Source")
+    target = Collection(name="Target")
+    database.save_collection(source)
+    database.save_collection(target)
+    waypoint = Waypoint(name="Alpha", latitude=1.0, longitude=2.0)
+    database.save_waypoint(waypoint, source.id)
+
+    with pytest.raises(ValueError, match="Waypoint does not exist"):
+        database.move_waypoints([waypoint.id, uuid4()], target.id)
+
+    assert database.list_waypoints(source.id) == [waypoint]
+    assert database.list_waypoints(target.id) == []
+
+
+def test_move_waypoints_invalid_or_same_target_rolls_back(tmp_path):
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source = Collection(name="Source")
+    database.save_collection(source)
+    waypoint = Waypoint(name="Alpha", latitude=1.0, longitude=2.0)
+    database.save_waypoint(waypoint, source.id)
+
+    with pytest.raises(ValueError, match="Target Collection does not exist"):
+        database.move_waypoints([waypoint.id], uuid4())
+    with pytest.raises(ValueError, match="must differ"):
+        database.move_waypoints([waypoint.id], source.id)
+
+    assert database.list_waypoints(source.id) == [waypoint]
+
+
 def test_update_waypoints_is_atomic(tmp_path):
     database = Database(tmp_path / "wpt_manager.db")
     database.initialize()

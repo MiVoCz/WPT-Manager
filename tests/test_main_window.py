@@ -93,6 +93,7 @@ def test_main_window_defaults(tmp_path):
     assert isinstance(window.comment_edit, QTextEdit)
 
     assert window.import_button.text() == "Import GPX"
+    assert window.new_collection_button.text() == "New Collection"
     assert window.export_button.text() == "Export GPX"
     assert not window.export_button.isEnabled()
     assert window.delete_collection_button.text() == "Delete Collection"
@@ -101,6 +102,8 @@ def test_main_window_defaults(tmp_path):
     assert not window.merge_collections_button.isEnabled()
     assert window.delete_waypoints_button.text() == "Delete Waypoint(s)"
     assert not window.delete_waypoints_button.isEnabled()
+    assert window.move_waypoints_button.text() == "Move to Collection..."
+    assert not window.move_waypoints_button.isEnabled()
     assert window.color_button.text() == "Choose color"
     assert window.save_button.text() == "Save"
     assert not window.save_button.isEnabled()
@@ -113,6 +116,254 @@ def test_main_window_defaults(tmp_path):
         for index in range(window.waypoint_sort_combo.count())
     ] == ["Name", "Added"]
     assert window.waypoint_sort_combo.currentData() == "name"
+
+    window.close()
+    application.processEvents()
+
+
+def test_new_collection_creates_first_selects_and_clears_open_map(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+
+    class AcceptedDialog:
+        collection_name = "Alps 2026"
+
+        def __init__(self, parent):
+            assert parent is window
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    window = MainWindow(database, icon_catalog=[])
+    window.open_map()
+    assert window.map_window is not None
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.CollectionCreateDialog",
+        AcceptedDialog,
+    )
+
+    window.new_collection_button.click()
+
+    collections = database.list_collections()
+    assert [collection.name for collection in collections] == ["Alps 2026"]
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == collections[0].id
+    assert window.waypoint_list.count() == 0
+    assert window.map_window.waypoint_map._waypoint_payload == []
+
+    window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_new_collection_preserves_alphabetical_order(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    database.save_collection(Collection(name="Zulu"))
+
+    class AcceptedDialog:
+        collection_name = "Alpha"
+
+        def __init__(self, parent):
+            del parent
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    window = MainWindow(database, icon_catalog=[])
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.CollectionCreateDialog",
+        AcceptedDialog,
+    )
+
+    window.create_collection()
+
+    assert [
+        window.collection_list.item(index).text()
+        for index in range(window.collection_list.count())
+    ] == ["Alpha", "Zulu"]
+    assert window.collection_list.currentItem().text() == "Alpha"
+
+    window.close()
+    application.processEvents()
+
+
+def test_new_collection_cancel_creates_nothing(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+
+    class CancelledDialog:
+        def __init__(self, parent):
+            del parent
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    window = MainWindow(database, icon_catalog=[])
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.CollectionCreateDialog",
+        CancelledDialog,
+    )
+
+    window.create_collection()
+
+    assert database.list_collections() == []
+    assert window.collection_list.count() == 0
+    window.close()
+    application.processEvents()
+
+
+def test_new_collection_database_error_keeps_gui_usable(tmp_path, monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+
+    class AcceptedDialog:
+        collection_name = "Alps 2026"
+
+        def __init__(self, parent):
+            del parent
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    messages = []
+    window = MainWindow(database, icon_catalog=[])
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.CollectionCreateDialog",
+        AcceptedDialog,
+    )
+    monkeypatch.setattr(
+        database,
+        "save_collection",
+        lambda collection: (_ for _ in ()).throw(
+            sqlite3.OperationalError("write failed")
+        ),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args: messages.append(args[2]),
+    )
+
+    window.create_collection()
+
+    assert window.collection_list.count() == 0
+    assert messages == [
+        "The Collection could not be created:\nwrite failed"
+    ]
+    assert window.new_collection_button.isEnabled()
+    window.close()
+    application.processEvents()
+
+
+def test_move_selected_waypoints_updates_source_and_open_map(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source = Collection(name="Source")
+    target = Collection(name="Target")
+    database.save_collection(source)
+    database.save_collection(target)
+    moved = [
+        Waypoint(
+            name="Alpha",
+            latitude=46.1,
+            longitude=10.2,
+            icon="peak",
+            color="#123456",
+            background="octagon",
+            note="Note",
+            comment="Comment",
+        ),
+        Waypoint(name="Bravo", latitude=47.1, longitude=11.2),
+    ]
+    remaining = Waypoint(name="Charlie", latitude=48.1, longitude=12.2)
+    for waypoint in [*moved, remaining]:
+        database.save_waypoint(waypoint, source.id)
+
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+    assert window.map_window is not None
+    window.waypoint_list.setCurrentRow(0)
+    assert window.move_waypoints_button.isEnabled()
+    window.waypoint_list.item(1).setSelected(True)
+    assert window.move_waypoints_button.isEnabled()
+
+    class AcceptedDialog:
+        target_collection_id = target.id
+
+        def __init__(self, count, targets, parent):
+            assert count == 2
+            assert [collection.id for collection in targets] == [target.id]
+            assert parent is window
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    messages = []
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.MoveWaypointsDialog",
+        AcceptedDialog,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: messages.append(args[2]),
+    )
+
+    window.move_waypoints_button.click()
+
+    assert database.list_waypoints(source.id) == [remaining]
+    assert database.list_waypoints(target.id) == moved
+    assert window.collection_list.currentItem().data(
+        Qt.ItemDataRole.UserRole
+    ) == source.id
+    assert window.waypoint_list.count() == 1
+    assert window.map_window.waypoint_map._waypoint_payload == [
+        {
+            "id": str(remaining.id),
+            "name": remaining.name,
+            "latitude": remaining.latitude,
+            "longitude": remaining.longitude,
+            "icon": remaining.icon,
+            "color": remaining.color,
+            "background": remaining.background,
+            "iconSvgUrl": None,
+        }
+    ]
+    assert not window.map_window.waypoint_map._pending_fit_viewport
+    assert messages == ["2 waypoint(s) moved to Target"]
+
+    window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
+def test_move_waypoints_disabled_without_another_collection(tmp_path):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    source = Collection(name="Only")
+    waypoint = Waypoint(name="Alpha", latitude=1.0, longitude=2.0)
+    database.save_collection(source)
+    database.save_waypoint(waypoint, source.id)
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.waypoint_list.setCurrentRow(0)
+
+    assert not window.move_waypoints_button.isEnabled()
 
     window.close()
     application.processEvents()

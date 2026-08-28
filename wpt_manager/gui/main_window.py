@@ -1,10 +1,19 @@
 import sqlite3
+import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
-from PySide6.QtCore import QItemSelectionModel, QSignalBlocker, Qt
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtCore import (
+    QCoreApplication,
+    QItemSelectionModel,
+    QProcess,
+    QSettings,
+    QSignalBlocker,
+    Qt,
+)
+from PySide6.QtGui import QAction, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -23,19 +32,28 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.database import Database
+from wpt_manager.config import load_application_config
 from wpt_manager.gui.collection_edit_dialog import CollectionEditDialog
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
 from wpt_manager.gui.gpx_import_dialog import GpxImportDialog
 from wpt_manager.gui.map_window import MapWindow
 from wpt_manager.gui.new_waypoint_dialog import NewWaypointDialog
+from wpt_manager.gui.user_data_folder_dialog import UserDataFolderDialog
 from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.icon_catalog import load_icon_catalog
+from wpt_manager.io.user_data import (
+    copy_user_data,
+    existing_user_data_items,
+    initialize_user_data_directory,
+    verify_directory_writable,
+)
 from wpt_manager.mapy_search import MapSearchResult, build_mapy_show_url
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.paths import create_application_settings, store_user_data_directory
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 
@@ -44,16 +62,31 @@ class MainWindow(QMainWindow):
         self,
         database: Database,
         icon_catalog: list[IconInfo] | None = None,
+        user_data_directory: Path | None = None,
+        settings: QSettings | None = None,
     ) -> None:
         super().__init__()
         install_native_title_bar_theming()
         self.database = database
+        self.user_data_directory = (
+            user_data_directory or self.database.path.parent
+        ).resolve()
+        self.settings = settings or create_application_settings()
         self.icon_catalog = (
-            load_icon_catalog()
+            load_icon_catalog(self.user_data_directory / "icons")
             if icon_catalog is None
             else icon_catalog
         )
         self.setWindowTitle("WPT-Manager")
+        settings_menu = self.menuBar().addMenu("Settings")
+        self.user_data_folder_action = QAction(
+            "User data folder...",
+            self,
+        )
+        settings_menu.addAction(self.user_data_folder_action)
+        self.user_data_folder_action.triggered.connect(
+            self.change_user_data_folder
+        )
         self.resize(1000, 700)
 
         self.collection_list = QListWidget()
@@ -162,6 +195,127 @@ class MainWindow(QMainWindow):
         self.export_button.clicked.connect(self.export_gpx_file)
         self.load_collections()
 
+    def change_user_data_folder(self) -> None:
+        dialog = UserDataFolderDialog(self.user_data_directory, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        target = dialog.selected_directory.resolve()
+        if target == self.user_data_directory:
+            return
+        try:
+            verify_directory_writable(target)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "User data folder",
+                f"The selected folder cannot be used:\n{exc}",
+            )
+            return
+
+        choice = self._choose_user_data_folder_action(target)
+        if choice is None:
+            return
+        try:
+            if choice == "copy":
+                collisions = existing_user_data_items(target)
+                if collisions and not self._confirm_user_data_overwrite(
+                    target,
+                    collisions,
+                ):
+                    return
+                copy_user_data(
+                    self.user_data_directory,
+                    target,
+                    overwrite=bool(collisions),
+                )
+            else:
+                initialize_user_data_directory(target)
+        except (OSError, shutil.Error) as exc:
+            QMessageBox.critical(
+                self,
+                "User data folder",
+                f"The data folder could not be changed:\n{exc}",
+            )
+            return
+
+        try:
+            store_user_data_directory(self.settings, target)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "User data folder",
+                f"The data folder setting could not be saved:\n{exc}",
+            )
+            return
+        self._prompt_restart_after_data_folder_change()
+
+    def _choose_user_data_folder_action(self, target: Path) -> str | None:
+        existing = existing_user_data_items(target)
+        contents = ", ".join(existing) if existing else "none"
+        message = QMessageBox(self)
+        message.setWindowTitle("Change user data folder")
+        message.setText("How should WPT-Manager use the selected folder?")
+        message.setInformativeText(
+            f"Existing managed data in the selected folder: {contents}"
+        )
+        use_button = message.addButton(
+            "Use existing data in selected folder",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        copy_button = message.addButton(
+            "Copy current data to selected folder",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        message.addButton(QMessageBox.StandardButton.Cancel)
+        message.exec()
+        if message.clickedButton() is use_button:
+            return "existing"
+        if message.clickedButton() is copy_button:
+            return "copy"
+        return None
+
+    def _confirm_user_data_overwrite(
+        self,
+        target: Path,
+        collisions: list[str],
+    ) -> bool:
+        answer = QMessageBox.warning(
+            self,
+            "Replace existing data?",
+            f"The following items already exist in {target}:\n"
+            + "\n".join(collisions)
+            + "\n\nReplace them with the current data?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _prompt_restart_after_data_folder_change(self) -> None:
+        message = QMessageBox(self)
+        message.setWindowTitle("Restart required")
+        message.setText(
+            "The data folder has been changed. WPT-Manager must restart."
+        )
+        restart_button = message.addButton(
+            "Restart now",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        message.addButton(
+            "Restart later",
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        message.exec()
+        if message.clickedButton() is restart_button:
+            self._restart_application()
+
+    def _restart_application(self) -> None:
+        arguments = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+        started = QProcess.startDetached(sys.executable, arguments)
+        succeeded = started[0] if isinstance(started, tuple) else started
+        if succeeded:
+            QCoreApplication.quit()
+
     def load_collections(self) -> bool:
         try:
             collections = self.database.list_collections()
@@ -268,6 +422,9 @@ class MainWindow(QMainWindow):
         if self.map_window is None:
             self.map_window = MapWindow(
                 self,
+                config=load_application_config(
+                    self.user_data_directory / "config.json"
+                ),
                 icon_catalog=self.icon_catalog,
             )
             self.map_window.marker_clicked.connect(

@@ -2056,7 +2056,7 @@ def test_icon_button_updates_icon_and_handles_cancel(
 ):
     monkeypatch.setattr(
         "wpt_manager.gui.main_window.load_icon_catalog",
-        lambda: [],
+        lambda *args: [],
     )
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")

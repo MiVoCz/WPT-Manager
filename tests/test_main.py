@@ -23,14 +23,18 @@ def test_main_initializes_database_and_starts_qt_application(
             return 0
 
     class FakeMainWindow:
-        def __init__(self, database):
-            events.append(("window", database))
+        def __init__(self, database, **kwargs):
+            events.append(("window", database, kwargs))
 
         def show(self):
             events.append(("show",))
 
     database_path = tmp_path / "data" / "wpt_manager.db"
-    monkeypatch.setattr("wpt_manager.main.DATABASE_PATH", database_path)
+    settings = object()
+    monkeypatch.setattr(
+        "wpt_manager.main.choose_user_data_directory",
+        lambda: (database_path.parent, settings),
+    )
     monkeypatch.setattr("wpt_manager.main.Database", FakeDatabase)
     monkeypatch.setattr("wpt_manager.main.QApplication", FakeApplication)
     monkeypatch.setattr("wpt_manager.main.MainWindow", FakeMainWindow)
@@ -38,12 +42,15 @@ def test_main_initializes_database_and_starts_qt_application(
     exit_code = main()
 
     assert exit_code == 0
-    assert database_path.parent.exists()
     assert [event[0] for event in events] == [
+        "application",
         "database",
         "initialize",
-        "application",
         "window",
         "show",
         "exec",
     ]
+    assert events[3][2] == {
+        "user_data_directory": database_path.parent,
+        "settings": settings,
+    }

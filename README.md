@@ -34,7 +34,7 @@ directly from the map.
 
 ### Icons
 
-- Load a user-managed SVG catalog from `data/icons`.
+- Load a user-managed SVG catalog from `icons/` in the user data folder.
 - Group icons by directory, with `Favorites` shown first.
 - Search and select icons with an SVG picker and preview.
 - Preserve unknown icon names when editing and saving waypoints.
@@ -44,7 +44,7 @@ directly from the map.
 - Open a separate `MapWindow` on demand.
 - Display the map with Leaflet.
 - Choose Mapy.com Outdoor, Basic, or Aerial tiles, or OpenStreetMap.
-- Load the Mapy.com API key from the local `data/config.json` file.
+- Load the Mapy.com API key from `config.json` in the user data folder.
 - Display the required Mapy.com or OpenStreetMap attribution.
 - Render waypoint markers using their icon, color, and background.
 - Synchronize waypoint selection between `MainWindow` and `MapWindow`.
@@ -60,8 +60,7 @@ directly from the map.
 - Show a result marker, result details, and formatted distance.
 - Open the selected result in Mapy.com.
 
-Saving a Mapy.com search result directly as a waypoint is planned but is not
-implemented yet.
+- Save a Mapy.com search result directly as a waypoint.
 
 ## Installation and development
 
@@ -85,10 +84,29 @@ Run the complete test suite:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-## Configuration
+## User data folder and configuration
 
-Copy `data/config.example.json` to `data/config.json` and enter a Mapy.com REST
-API key:
+On the first start, WPT-Manager asks where its user data should be stored. The
+default is `WPT-Manager` in the user's Documents folder. The selected location
+is remembered in platform settings; only the folder path is stored there.
+
+The folder contains:
+
+```text
+wpt_manager.db
+config.json
+icons/
+```
+
+The location can later be changed with **Settings > User data folder...**.
+When changing it, choose either to use data already present in the selected
+folder or to copy the current database, configuration, and icon catalog there.
+Existing target data is never replaced without confirmation, and the original
+folder is never moved or deleted. The change takes full effect after restarting
+WPT-Manager.
+
+Enter a Mapy.com REST API key in `config.json` inside the selected user data
+folder:
 
 ```json
 {
@@ -96,8 +114,8 @@ API key:
 }
 ```
 
-Never commit a real API key. `data/config.json` is ignored by Git and must
-remain local. Without a Mapy.com key, the application can still use
+Never commit or distribute a real API key. Without a Mapy.com key, the
+application can still use
 OpenStreetMap; Mapy.com map layers and search require the key.
 
 ## Icon catalog
@@ -105,7 +123,7 @@ OpenStreetMap; Mapy.com map layers and search require the key.
 The catalog uses this layout:
 
 ```text
-data/icons/<group>/*.svg
+<user data folder>/icons/<group>/*.svg
 ```
 
 The directory name becomes the group name, and `Favorites` is treated as the
@@ -116,9 +134,9 @@ a waypoint icon in OsmAnd.
 
 ## Data
 
-Application data is stored under `data/`. Collections and waypoints are stored
-in the SQLite database `data/wpt_manager.db`. The database uses explicit schema
-versioning and UUIDs as stable identifiers for Collections and waypoints.
+Collections and waypoints are stored in `wpt_manager.db` in the selected user
+data folder. The database uses explicit schema versioning and UUIDs as stable
+identifiers for Collections and waypoints.
 
 ## Known issues
 
@@ -141,8 +159,6 @@ the top-level windows. Waypoint selection and editing are not affected.
 
 ## Roadmap
 
-- Add a Mapy.com search result as a waypoint.
-- Move an existing waypoint from the map.
 - Add reverse geocoding when creating a waypoint.
 - Add more map context actions.
 - Improve the search user experience.
@@ -166,4 +182,4 @@ This repository does not currently define its own license.
 
 Mapy.com map content is subject to Mapy.com's terms. OpenStreetMap attribution
 must be preserved. Users are responsible for the licensing and permitted use
-of icons they place in `data/icons`.
+of icons they place in the `icons/` directory of their user data folder.

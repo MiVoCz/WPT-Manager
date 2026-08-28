@@ -9,7 +9,15 @@ version = "0.1.0"
 description = "Waypoint manager and OsmAnd GPX exporter"
 requires-python = ">=3.14"
 dependencies = [
-    "PySide6>=6.10.1",
+    "PySide6==6.11.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==9.1.1",
+]
+build = [
+    "PyInstaller==6.22.2",
 ]
 
 

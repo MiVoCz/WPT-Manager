@@ -12,6 +12,7 @@ from wpt_manager.gui.user_data_folder_dialog import UserDataFolderDialog
 from wpt_manager.io.user_data import initialize_user_data_directory
 from wpt_manager.paths import (
     create_application_settings,
+    configure_application_identity,
     default_user_data_directory,
     stored_user_data_directory,
     store_user_data_directory,
@@ -59,6 +60,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     application = QApplication(sys.argv)
+    configure_application_identity()
     selected = choose_user_data_directory()
     if selected is None:
         return 0

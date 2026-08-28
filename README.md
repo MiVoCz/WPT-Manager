@@ -84,6 +84,26 @@ Run the complete test suite:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+## Building Windows distribution
+
+The internal Windows build requires Python 3.14 and the test and build extras:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[test,build]"
+```
+
+Activate that environment and build the windowed `onedir` distribution:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+.\packaging\build_windows.ps1
+```
+
+The audited artifact is created in `dist/WPT-Manager/`. Copy the complete
+directory to the target Windows PC. It does not require a separately installed
+Python interpreter. This is an internal `onedir` build, not a public v0.1
+release or installer.
+
 ## User data folder and configuration
 
 On the first start, WPT-Manager asks where its user data should be stored. The
@@ -178,7 +198,7 @@ the top-level windows. Waypoint selection and editing are not affected.
 
 ## License and third-party content
 
-This repository does not currently define its own license.
+WPT-Manager is licensed under the [MIT License](LICENSE).
 
 Mapy.com map content is subject to Mapy.com's terms. OpenStreetMap attribution
 must be preserved. Users are responsible for the licensing and permitted use

@@ -11,11 +11,111 @@ from wpt_manager.database.database import Database
 from wpt_manager.gui.main_window import MainWindow, application_restart_command
 from wpt_manager.io.user_data import copy_user_data, initialize_user_data_directory
 from wpt_manager.main import choose_user_data_directory
-from wpt_manager.paths import USER_DATA_DIRECTORY_KEY, stored_user_data_directory
+from wpt_manager.paths import (
+    DEVELOPMENT_APPLICATION_NAME,
+    FROZEN_APPLICATION_NAME,
+    ORGANIZATION_NAME,
+    USER_DATA_DIRECTORY_KEY,
+    application_settings_identity,
+    stored_user_data_directory,
+    store_user_data_directory,
+)
 
 
 def temporary_settings(path: Path) -> QSettings:
     return QSettings(str(path), QSettings.Format.IniFormat)
+
+
+def isolated_identity_settings(tmp_path: Path) -> QSettings:
+    organization, application = application_settings_identity()
+    return temporary_settings(tmp_path / f"{organization}-{application}.ini")
+
+
+def test_development_and_frozen_use_distinct_stable_identities(monkeypatch):
+    monkeypatch.delattr("sys.frozen", raising=False)
+    development_identity = application_settings_identity()
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    frozen_identity = application_settings_identity()
+
+    assert development_identity == (
+        ORGANIZATION_NAME,
+        DEVELOPMENT_APPLICATION_NAME,
+    )
+    assert frozen_identity == (ORGANIZATION_NAME, FROZEN_APPLICATION_NAME)
+    assert development_identity != frozen_identity
+    assert "0.1.0" not in frozen_identity[1]
+
+
+def test_development_user_data_is_not_visible_to_frozen(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delattr("sys.frozen", raising=False)
+    development_settings = isolated_identity_settings(tmp_path)
+    development_directory = tmp_path / "development-data"
+    store_user_data_directory(development_settings, development_directory)
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    frozen_settings = isolated_identity_settings(tmp_path)
+
+    assert stored_user_data_directory(development_settings) == (
+        development_directory
+    )
+    assert stored_user_data_directory(frozen_settings) is None
+
+
+def test_first_and_second_frozen_start_use_production_setting(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    settings = isolated_identity_settings(tmp_path)
+    selected = tmp_path / "production-data"
+    dialog_calls = []
+
+    class AcceptedDialog:
+        def __init__(self, current, *, first_run=False):
+            dialog_calls.append((current, first_run))
+            self.selected_directory = selected
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "wpt_manager.main.create_application_settings", lambda: settings
+    )
+    monkeypatch.setattr(
+        "wpt_manager.main.default_user_data_directory", lambda: selected
+    )
+    monkeypatch.setattr(
+        "wpt_manager.main.UserDataFolderDialog", AcceptedDialog
+    )
+
+    first_result = choose_user_data_directory()
+    second_result = choose_user_data_directory()
+
+    assert first_result == (selected.resolve(), settings)
+    assert second_result == (selected.resolve(), settings)
+    assert dialog_calls == [(selected, True)]
+    assert stored_user_data_directory(settings) == selected.resolve()
+    application.processEvents()
+
+
+def test_frozen_restart_preserves_production_bootstrap_setting(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", "WPT-Manager.exe")
+    settings = isolated_identity_settings(tmp_path)
+    selected = tmp_path / "production-data"
+    store_user_data_directory(settings, selected)
+
+    restarted_settings = isolated_identity_settings(tmp_path)
+
+    assert application_restart_command() == ("WPT-Manager.exe", [])
+    assert stored_user_data_directory(restarted_settings) == selected
 
 
 def test_first_run_uses_default_and_stores_only_bootstrap_path(

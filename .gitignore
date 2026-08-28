@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-*/
+.test-*/
+build/
+dist/
+*.spec.tmp
 *.egg-info/
 .vscode/
 data/wpt_manager.db

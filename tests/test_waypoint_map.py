@@ -3,7 +3,7 @@ from uuid import uuid4
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import QApplication, QMenu
@@ -392,6 +392,7 @@ def test_marker_context_menu_passes_uuid_selects_and_does_not_request_add(
     ]
     assert [action.text() for action in actions] == [
         "Edit waypoint",
+        "Move waypoint",
         "Search nearby",
         "Open in Mapy.com",
         "Delete waypoint",
@@ -404,6 +405,70 @@ def test_marker_context_menu_passes_uuid_selects_and_does_not_request_add(
         ("open", waypoint_id),
         ("delete", waypoint_id),
     ]
+
+    map_window.close()
+    application.processEvents()
+
+
+def test_move_mode_uses_uuid_routes_map_click_and_blocks_add(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    waypoint_id = uuid4()
+    monkeypatch.setattr(QMenu, "popup", lambda *args: None)
+
+    from wpt_manager.config import ApplicationConfig
+    from wpt_manager.gui.map_window import MapWindow
+
+    map_window = MapWindow(config=ApplicationConfig())
+    moves = []
+    adds = []
+    normal_clicks = []
+    map_window.move_waypoint_requested.connect(
+        lambda *values: moves.append(values)
+    )
+    map_window.add_waypoint_requested.connect(
+        lambda *values: adds.append(values)
+    )
+    map_window.map_clicked.connect(lambda *values: normal_clicks.append(values))
+
+    map_window.start_move_mode(waypoint_id)
+    assert map_window._move_waypoint_id == waypoint_id
+    assert map_window.selected_waypoint_ids == [waypoint_id]
+    assert map_window.move_mode_status.text() == (
+        "Click the new waypoint position"
+    )
+    assert map_window.waypoint_map.cursor().shape() == Qt.CursorShape.CrossCursor
+
+    map_window._show_map_context_menu(50.0, 14.0, 10, 10)
+    assert adds == []
+    map_window._handle_map_clicked(46.5292, 10.4518)
+
+    assert moves == [(waypoint_id, 46.5292, 10.4518)]
+    assert normal_clicks == []
+    assert map_window._move_waypoint_id is None
+
+    map_window._handle_map_clicked(50.1, 14.1)
+    map_window._show_map_context_menu(50.2, 14.2, 10, 10)
+    map_window._map_context_menu.actions()[0].trigger()
+    assert normal_clicks == [(50.1, 14.1)]
+    assert adds == [(50.2, 14.2)]
+
+    map_window.close()
+    application.processEvents()
+
+
+def test_escape_cancels_move_mode():
+    application = QApplication.instance() or QApplication([])
+
+    from wpt_manager.config import ApplicationConfig
+    from wpt_manager.gui.map_window import MapWindow
+
+    map_window = MapWindow(config=ApplicationConfig())
+    map_window.start_move_mode(uuid4())
+    map_window._cancel_move_shortcut.activated.emit()
+
+    assert map_window._move_waypoint_id is None
+    assert map_window.move_mode_status.text() == ""
+    assert map_window.waypoint_map.cursor().shape() != Qt.CursorShape.CrossCursor
 
     map_window.close()
     application.processEvents()

@@ -862,6 +862,70 @@ def test_edit_waypoint_from_map_restores_and_activates_main_window(
     application.processEvents()
 
 
+def test_move_waypoint_cancel_then_confirm_preserves_identity_and_data(
+    tmp_path,
+    monkeypatch,
+):
+    application = QApplication.instance() or QApplication([])
+    database = Database(tmp_path / "wpt_manager.db")
+    database.initialize()
+    collection = Collection(name="Mountain passes")
+    database.save_collection(collection)
+    waypoint = Waypoint(
+        name="Passo Stelvio",
+        latitude=46.5286,
+        longitude=10.4531,
+        icon="peak",
+        color="#123456",
+        background="octagon",
+        note="Short note",
+        comment="Detailed comment",
+    )
+    database.save_waypoint(waypoint, collection.id)
+    window = MainWindow(database, icon_catalog=[])
+    window.collection_list.setCurrentRow(0)
+    window.open_map()
+    assert window.map_window is not None
+
+    monkeypatch.setattr(window, "_confirm_waypoint_move", lambda *args: False)
+    window.move_waypoint_from_map(waypoint.id, 46.5292, 10.4518)
+    assert database.get_waypoint(waypoint.id) == waypoint
+
+    datasets = []
+    original_set_waypoints = window.map_window.set_waypoints
+    monkeypatch.setattr(
+        window.map_window,
+        "set_waypoints",
+        lambda waypoints, fit_viewport=True: (
+            datasets.append((list(waypoints), fit_viewport)),
+            original_set_waypoints(waypoints, fit_viewport),
+        ),
+    )
+    monkeypatch.setattr(window, "_confirm_waypoint_move", lambda *args: True)
+    window.move_waypoint_from_map(waypoint.id, 46.5292, 10.4518)
+
+    moved = database.get_waypoint(waypoint.id)
+    assert moved == Waypoint(
+        name=waypoint.name,
+        latitude=46.5292,
+        longitude=10.4518,
+        id=waypoint.id,
+        icon=waypoint.icon,
+        color=waypoint.color,
+        background=waypoint.background,
+        note=waypoint.note,
+        comment=waypoint.comment,
+    )
+    assert datasets
+    assert datasets[-1][1] is False
+    assert datasets[-1][0] == [moved]
+    assert window.map_window.selected_waypoint_ids == [waypoint.id]
+
+    window.map_window.close()
+    window.close()
+    application.processEvents()
+
+
 def test_delete_waypoint_from_marker_cancel_and_confirm(
     tmp_path,
     monkeypatch,

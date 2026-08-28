@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
@@ -281,6 +282,9 @@ class MainWindow(QMainWindow):
             self.map_window.edit_waypoint_requested.connect(
                 self.edit_waypoint_from_map
             )
+            self.map_window.move_waypoint_requested.connect(
+                self.move_waypoint_from_map
+            )
             self.map_window.search_nearby_requested.connect(
                 self.search_near_waypoint_from_map
             )
@@ -384,6 +388,72 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         if self.waypoint_list.currentItem() is not None:
             self.name_edit.setFocus()
+
+    def move_waypoint_from_map(
+        self,
+        waypoint_id: UUID,
+        latitude: float,
+        longitude: float,
+    ) -> None:
+        waypoint = self._map_waypoint_by_id(waypoint_id)
+        if waypoint is None:
+            return
+
+        if not self._confirm_waypoint_move(waypoint, latitude, longitude):
+            return
+
+        moved_waypoint = replace(
+            waypoint,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        errors = validate_waypoint(moved_waypoint)
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Invalid waypoint",
+                "\n".join(errors),
+            )
+            return
+        try:
+            self.database.update_waypoint(moved_waypoint)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Move waypoint failed",
+                f"The waypoint could not be moved:\n{exc}",
+            )
+            return
+
+        collection_item = self.collection_list.currentItem()
+        if collection_item is not None:
+            self._reload_and_select_waypoint(
+                waypoint_id,
+                collection_item,
+            )
+
+    def _confirm_waypoint_move(
+        self,
+        waypoint: Waypoint,
+        latitude: float,
+        longitude: float,
+    ) -> bool:
+        confirmation = QMessageBox(self)
+        confirmation.setWindowTitle("Move waypoint")
+        confirmation.setText(f'Move waypoint "{waypoint.name}"?')
+        confirmation.setInformativeText(
+            f"Old:\n{waypoint.latitude:.7f}, {waypoint.longitude:.7f}"
+            f"\n\nNew:\n{latitude:.7f}, {longitude:.7f}"
+        )
+        move_button = confirmation.addButton(
+            "Move", QMessageBox.ButtonRole.AcceptRole
+        )
+        confirmation.addButton(
+            QMessageBox.StandardButton.Cancel
+        )
+        confirmation.setDefaultButton(move_button)
+        confirmation.exec()
+        return confirmation.clickedButton() is move_button
 
     def search_near_waypoint_from_map(self, waypoint_id: UUID) -> None:
         waypoint = self._map_waypoint_by_id(waypoint_id)

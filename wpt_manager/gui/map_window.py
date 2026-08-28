@@ -3,7 +3,7 @@ from dataclasses import replace
 from uuid import UUID
 
 from PySide6.QtCore import QPoint, QSignalBlocker, Signal, Slot, Qt
-from PySide6.QtGui import QCloseEvent, QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtWidgets import (
     QComboBox,
@@ -69,6 +69,7 @@ class MapWindow(QMainWindow):
     add_waypoint_requested = Signal(float, float)
     add_search_result_requested = Signal(object)
     edit_waypoint_requested = Signal(object)
+    move_waypoint_requested = Signal(object, float, float)
     search_nearby_requested = Signal(object)
     open_waypoint_in_mapy_requested = Signal(object)
     delete_waypoint_requested = Signal(object)
@@ -86,6 +87,7 @@ class MapWindow(QMainWindow):
         self.setWindowTitle("WPT-Manager Map")
         self.resize(900, 700)
         self.selected_waypoint_ids: list[UUID] = []
+        self._move_waypoint_id: UUID | None = None
         self._viewport_bbox: tuple[float, float, float, float] | None = None
         self._search_waypoint_position: tuple[float, float] | None = None
         self._selected_search_result: MapSearchResult | None = None
@@ -110,6 +112,8 @@ class MapWindow(QMainWindow):
         toolbar.addWidget(self.map_source_combo)
         self.map_source_status = QLabel()
         toolbar.addWidget(self.map_source_status)
+        self.move_mode_status = QLabel()
+        toolbar.addWidget(self.move_mode_status)
         central_layout.addWidget(toolbar)
         central_layout.addWidget(content_splitter, 1)
 
@@ -142,7 +146,7 @@ class MapWindow(QMainWindow):
         content_splitter.setCollapsible(1, False)
         content_splitter.setSizes([620, 280])
         self.waypoint_map.marker_clicked.connect(self._emit_marker_clicked)
-        self.waypoint_map.map_clicked.connect(self.map_clicked)
+        self.waypoint_map.map_clicked.connect(self._handle_map_clicked)
         self.waypoint_map.map_context_menu_requested.connect(
             self._show_map_context_menu
         )
@@ -173,6 +177,11 @@ class MapWindow(QMainWindow):
             self.search_status.setText(
                 "Mapy.com search requires a configured API key."
             )
+        self._cancel_move_shortcut = QShortcut(
+            QKeySequence(Qt.Key.Key_Escape),
+            self,
+        )
+        self._cancel_move_shortcut.activated.connect(self.cancel_move_mode)
 
     def _build_search_panel(self, parent: QWidget) -> QWidget:
         panel = QWidget(parent)
@@ -509,6 +518,8 @@ class MapWindow(QMainWindow):
         x: int,
         y: int,
     ) -> None:
+        if self._move_waypoint_id is not None:
+            return
         menu = QMenu(self)
         action = menu.addAction("Add waypoint here")
         action.triggered.connect(
@@ -528,12 +539,16 @@ class MapWindow(QMainWindow):
         self.marker_clicked.emit(identifier)
         menu = QMenu(self)
         edit_action = menu.addAction("Edit waypoint")
+        move_action = menu.addAction("Move waypoint")
         search_action = menu.addAction("Search nearby")
         open_action = menu.addAction("Open in Mapy.com")
         menu.addSeparator()
         delete_action = menu.addAction("Delete waypoint")
         edit_action.triggered.connect(
             lambda: self.edit_waypoint_requested.emit(identifier)
+        )
+        move_action.triggered.connect(
+            lambda: self.start_move_mode(identifier)
         )
         search_action.triggered.connect(
             lambda: self.search_nearby_requested.emit(identifier)
@@ -549,7 +564,33 @@ class MapWindow(QMainWindow):
 
     @Slot(str)
     def _emit_marker_clicked(self, waypoint_id: str) -> None:
+        if self._move_waypoint_id is not None:
+            return
         self.marker_clicked.emit(UUID(waypoint_id))
+
+    @Slot(object)
+    def start_move_mode(self, waypoint_id: UUID) -> None:
+        self._move_waypoint_id = waypoint_id
+        self.set_selected_waypoint_ids([waypoint_id])
+        self.move_mode_status.setText("Click the new waypoint position")
+        self.waypoint_map.setCursor(Qt.CursorShape.CrossCursor)
+
+    @Slot(float, float)
+    def _handle_map_clicked(self, latitude: float, longitude: float) -> None:
+        waypoint_id = self._move_waypoint_id
+        if waypoint_id is None:
+            self.map_clicked.emit(latitude, longitude)
+            return
+        self.cancel_move_mode()
+        self.move_waypoint_requested.emit(waypoint_id, latitude, longitude)
+
+    @Slot()
+    def cancel_move_mode(self) -> None:
+        if self._move_waypoint_id is None:
+            return
+        self._move_waypoint_id = None
+        self.move_mode_status.clear()
+        self.waypoint_map.unsetCursor()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.waypoint_map.release_web_engine()

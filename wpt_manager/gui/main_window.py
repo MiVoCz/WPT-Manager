@@ -57,6 +57,13 @@ from wpt_manager.paths import create_application_settings, store_user_data_direc
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
 
+def application_restart_command() -> tuple[str, list[str]]:
+    """Return the current application entry point for a detached restart."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, []
+    return sys.executable, ["-m", "wpt_manager"]
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -292,6 +299,10 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def _prompt_restart_after_data_folder_change(self) -> None:
+        if self._ask_restart_now():
+            self._restart_application()
+
+    def _ask_restart_now(self) -> bool:
         message = QMessageBox(self)
         message.setWindowTitle("Restart required")
         message.setText(
@@ -306,14 +317,20 @@ class MainWindow(QMainWindow):
             QMessageBox.ButtonRole.RejectRole,
         )
         message.exec()
-        if message.clickedButton() is restart_button:
-            self._restart_application()
+        return message.clickedButton() is restart_button
 
     def _restart_application(self) -> None:
-        arguments = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
-        started = QProcess.startDetached(sys.executable, arguments)
+        program, arguments = application_restart_command()
+        started = QProcess.startDetached(
+            program,
+            arguments,
+            str(Path.cwd()),
+        )
         succeeded = started[0] if isinstance(started, tuple) else started
         if succeeded:
+            if self.map_window is not None:
+                self.map_window.close()
+            self.close()
             QCoreApplication.quit()
 
     def load_collections(self) -> bool:

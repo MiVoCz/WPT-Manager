@@ -8,7 +8,7 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication, QDialog
 
 from wpt_manager.database.database import Database
-from wpt_manager.gui.main_window import MainWindow
+from wpt_manager.gui.main_window import MainWindow, application_restart_command
 from wpt_manager.io.user_data import copy_user_data, initialize_user_data_directory
 from wpt_manager.main import choose_user_data_directory
 from wpt_manager.paths import USER_DATA_DIRECTORY_KEY, stored_user_data_directory
@@ -243,5 +243,80 @@ def test_copy_failure_keeps_original_bootstrap_path(tmp_path, monkeypatch):
     window.change_user_data_folder()
 
     assert stored_user_data_directory(settings) == source
+    window.close()
+    application.processEvents()
+
+
+def test_development_restart_uses_active_python_package_entry(monkeypatch):
+    monkeypatch.delattr("sys.frozen", raising=False)
+    monkeypatch.setattr("sys.executable", "active-venv-python")
+
+    assert application_restart_command() == (
+        "active-venv-python",
+        ["-m", "wpt_manager"],
+    )
+
+
+def test_frozen_restart_uses_executable_directly(monkeypatch):
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", "WPT-Manager.exe")
+
+    assert application_restart_command() == ("WPT-Manager.exe", [])
+
+
+def test_restart_launches_command_without_main_py_and_closes_windows(
+    tmp_path,
+    monkeypatch,
+):
+    application, window, source, settings = create_window(tmp_path, monkeypatch)
+    del source, settings
+    launched = []
+    closed = []
+    monkeypatch.delattr("sys.frozen", raising=False)
+    monkeypatch.setattr("sys.executable", "venv-python.exe")
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.QProcess.startDetached",
+        lambda *args: launched.append(args) or (True, 123),
+    )
+    monkeypatch.setattr(
+        "wpt_manager.gui.main_window.QCoreApplication.quit",
+        lambda: closed.append("quit"),
+    )
+    original_close = window.close
+    monkeypatch.setattr(window, "close", lambda: closed.append("main"))
+    window.map_window = type(
+        "FakeMapWindow",
+        (),
+        {"close": lambda self: closed.append("map")},
+    )()
+
+    window._restart_application()
+
+    assert launched == [
+        (
+            "venv-python.exe",
+            ["-m", "wpt_manager"],
+            str(Path.cwd()),
+        )
+    ]
+    assert "main.py" not in " ".join(launched[0][1])
+    assert closed == ["map", "main", "quit"]
+    window.map_window = None
+    original_close()
+    application.processEvents()
+
+
+def test_restart_later_does_not_launch_process(tmp_path, monkeypatch):
+    application, window, source, settings = create_window(tmp_path, monkeypatch)
+    del source, settings
+    launches = []
+    monkeypatch.setattr(window, "_ask_restart_now", lambda: False)
+    monkeypatch.setattr(
+        window, "_restart_application", lambda: launches.append(True)
+    )
+
+    window._prompt_restart_after_data_folder_change()
+
+    assert launches == []
     window.close()
     application.processEvents()

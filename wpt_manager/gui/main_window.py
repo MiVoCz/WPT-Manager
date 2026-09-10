@@ -21,12 +21,18 @@ from PySide6.QtWidgets import (
     QDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
+    QTabWidget,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -43,8 +49,18 @@ from wpt_manager.gui.new_waypoint_dialog import NewWaypointDialog
 from wpt_manager.gui.user_data_folder_dialog import UserDataFolderDialog
 from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.gui.waypoint_editor import WaypointEditor
+from wpt_manager.gui.track_editor import TrackEditor
+from wpt_manager.gui.adventure_editor import AdventureEditor
+from wpt_manager.gui.add_tracks_dialog import AddTracksDialog
+from wpt_manager.gui.track_table import (
+    TRACK_ID_ROLE, TrackFilterProxyModel, TrackTableModel,
+)
+from wpt_manager.gui.visibility_header import VisibilityHeaderCheckBox
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
+from wpt_manager.io.gpx_track_importer import (
+    import_gpx_tracks, import_gpx_files, import_gpx_files_to_adventure,
+)
 from wpt_manager.io.icon_catalog import load_icon_catalog
 from wpt_manager.io.user_data import (
     copy_user_data,
@@ -56,6 +72,8 @@ from wpt_manager.mapy_search import MapSearchResult, build_mapy_show_url
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.models.track import Track, TrackPoint
+from wpt_manager.models.adventure import Adventure
 from wpt_manager.paths import create_application_settings, store_user_data_directory
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
@@ -114,6 +132,8 @@ class MainWindow(QMainWindow):
 
         collection_panel = QGroupBox("Collections")
         collection_layout = QVBoxLayout(collection_panel)
+        self.collection_visibility_header = VisibilityHeaderCheckBox()
+        collection_layout.addWidget(self.collection_visibility_header)
         collection_layout.addWidget(self.collection_list)
 
         collection_buttons = QHBoxLayout()
@@ -125,6 +145,71 @@ class MainWindow(QMainWindow):
         collection_layout.addLayout(collection_buttons)
         collection_layout.addWidget(self.merge_collections_button)
         collection_layout.addWidget(self.open_map_button)
+
+        self.track_table = QTableView()
+        self.track_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.track_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.track_model = TrackTableModel()
+        self.track_proxy = TrackFilterProxyModel()
+        self.track_proxy.setSourceModel(self.track_model)
+        self.track_table.setModel(self.track_proxy)
+        self.track_table.setSortingEnabled(True)
+        self.track_search_edit = QLineEdit()
+        self.track_search_edit.setPlaceholderText("Search tracks")
+        self.track_adventure_filter = QComboBox()
+        self.adventure_list = QListWidget()
+        self.new_adventure_button = QPushButton("New Adventure")
+        self.delete_adventure_button = QPushButton("Delete Adventure")
+        self.delete_adventure_button.setEnabled(False)
+        adventure_panel = QGroupBox("Adventures")
+        adventure_layout = QVBoxLayout(adventure_panel)
+        self.adventure_visibility_header = VisibilityHeaderCheckBox()
+        adventure_layout.addWidget(self.adventure_visibility_header)
+        adventure_layout.addWidget(self.adventure_list)
+        adventure_buttons = QHBoxLayout()
+        for button in (
+            self.new_adventure_button, self.delete_adventure_button,
+        ):
+            adventure_buttons.addWidget(button)
+        adventure_layout.addLayout(adventure_buttons)
+        self.import_track_button = QPushButton("Import Track GPX...")
+        self.delete_track_button = QPushButton("Delete Track")
+        self.delete_track_button.setEnabled(False)
+        self.zoom_track_button = QPushButton("Zoom to Track")
+        self.zoom_track_button.setEnabled(False)
+        self.open_track_map_button = QPushButton("Open Map")
+        self.add_selected_to_adventure_button = QPushButton(
+            "Add Selected to Adventure..."
+        )
+        track_panel = QGroupBox("Tracks")
+        track_layout = QVBoxLayout(track_panel)
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Search:"))
+        filters.addWidget(self.track_search_edit)
+        filters.addWidget(QLabel("Adventure:"))
+        filters.addWidget(self.track_adventure_filter)
+        track_layout.addLayout(filters)
+        self.track_visibility_header = VisibilityHeaderCheckBox()
+        track_layout.addWidget(self.track_visibility_header)
+        track_layout.addWidget(self.track_table)
+        track_buttons = QHBoxLayout()
+        track_buttons.addWidget(self.import_track_button)
+        track_buttons.addWidget(self.delete_track_button)
+        track_buttons.addWidget(self.zoom_track_button)
+        track_buttons.addWidget(self.add_selected_to_adventure_button)
+        track_layout.addLayout(track_buttons)
+        track_layout.addWidget(self.open_track_map_button)
+        self.open_adventure_map_button = QPushButton("Open Map")
+        adventure_layout.addWidget(self.open_adventure_map_button)
+
+        self.data_tabs = QTabWidget()
+        self.data_tabs.addTab(collection_panel, "Collections")
+        self.data_tabs.addTab(track_panel, "Tracks")
+        self.data_tabs.addTab(adventure_panel, "Adventures")
 
         self.waypoint_list = QListWidget()
         self.waypoint_list.setSelectionMode(
@@ -139,6 +224,7 @@ class MainWindow(QMainWindow):
         self.move_waypoints_button.setEnabled(False)
 
         waypoint_panel = QGroupBox("Waypoints")
+        self.waypoint_panel = waypoint_panel
         waypoint_layout = QVBoxLayout(waypoint_panel)
         waypoint_layout.addWidget(self.waypoint_sort_combo)
         waypoint_layout.addWidget(self.waypoint_list)
@@ -146,9 +232,15 @@ class MainWindow(QMainWindow):
         waypoint_layout.addWidget(self.delete_waypoints_button)
 
         self.waypoint_editor = WaypointEditor(self.icon_catalog)
+        self.track_editor = TrackEditor()
+        self.adventure_editor = AdventureEditor()
         self.map_window: MapWindow | None = None
         self._map_waypoints: list[Waypoint] = []
         self._selected_waypoint_ids: list[UUID] = []
+        self._visible_track_ids: set[UUID] = set()
+        self._shown_track_ids: set[UUID] = set()
+        self._visible_collection_ids: set[UUID] = set()
+        self._shown_collection_ids: set[UUID] = set()
         self.editor_panel = self.waypoint_editor
         self.icon_paths_by_name = self.waypoint_editor.icon_paths_by_name
         self.name_edit = self.waypoint_editor.name_edit
@@ -173,9 +265,14 @@ class MainWindow(QMainWindow):
         self.right_splitter.setStretchFactor(0, 2)
         self.right_splitter.setStretchFactor(1, 3)
 
+        self.right_panel_stack = QStackedWidget()
+        self.right_panel_stack.addWidget(self.right_splitter)
+        self.right_panel_stack.addWidget(self.track_editor)
+        self.right_panel_stack.addWidget(self.adventure_editor)
+
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.main_splitter.addWidget(collection_panel)
-        self.main_splitter.addWidget(self.right_splitter)
+        self.main_splitter.addWidget(self.data_tabs)
+        self.main_splitter.addWidget(self.right_panel_stack)
         self.main_splitter.setStretchFactor(0, 1)
         self.main_splitter.setStretchFactor(1, 3)
         self.main_splitter.setSizes([250, 750])
@@ -212,7 +309,696 @@ class MainWindow(QMainWindow):
         )
         self.waypoint_editor.save_requested.connect(self.save_waypoint)
         self.export_button.clicked.connect(self.export_gpx_file)
+        self.import_track_button.clicked.connect(self.import_track_gpx_file)
+        self.delete_track_button.clicked.connect(self.delete_selected_track)
+        self.zoom_track_button.clicked.connect(self.zoom_to_selected_track)
+        self.open_track_map_button.clicked.connect(self.open_map)
+        self.track_table.selectionModel().currentRowChanged.connect(
+            self.update_track_selection
+        )
+        self.track_model.visibility_changed.connect(
+            self.update_track_visibility
+        )
+        self.track_search_edit.textChanged.connect(
+            self.update_track_search
+        )
+        self.track_adventure_filter.currentIndexChanged.connect(
+            self.update_track_adventure_filter
+        )
+        self.track_editor.save_requested.connect(self.save_track)
+        self.adventure_editor.save_requested.connect(self.save_adventure)
+        self.adventure_editor.add_existing_requested.connect(
+            self.add_existing_tracks_to_adventure
+        )
+        self.adventure_editor.import_requested.connect(
+            self.import_tracks_into_selected_adventure
+        )
+        self.adventure_editor.remove_requested.connect(
+            self.remove_editor_track_from_adventure
+        )
+        self.adventure_editor.move_up_requested.connect(
+            lambda: self.move_adventure_track(-1)
+        )
+        self.adventure_editor.move_down_requested.connect(
+            lambda: self.move_adventure_track(1)
+        )
+        self.adventure_editor.track_visibility_requested.connect(
+            self.set_track_visibility
+        )
+        self.adventure_editor.tracks_visibility_requested.connect(
+            self.set_tracks_visibility
+        )
+        self.new_adventure_button.clicked.connect(self.create_adventure)
+        self.delete_adventure_button.clicked.connect(self.delete_adventure)
+        self.add_selected_to_adventure_button.clicked.connect(
+            self.add_selected_tracks_to_adventure_dialog
+        )
+        self.adventure_list.currentItemChanged.connect(
+            self.update_adventure_selection
+        )
+        self.adventure_list.itemChanged.connect(
+            self.update_adventure_visibility
+        )
+        self.open_adventure_map_button.clicked.connect(self.open_map)
+        self.collection_list.itemChanged.connect(
+            self.update_collection_visibility
+        )
+        self.collection_visibility_header.stateChanged.connect(
+            self.set_all_collections_visible
+        )
+        self.track_visibility_header.stateChanged.connect(
+            self.set_all_filtered_tracks_visible
+        )
+        self.adventure_visibility_header.stateChanged.connect(
+            self.set_all_adventures_visible
+        )
+        self.data_tabs.currentChanged.connect(self.switch_editor)
         self.load_collections()
+        self.load_tracks()
+        self.load_adventures()
+
+    def switch_editor(self, index: int) -> None:
+        self.right_panel_stack.setCurrentIndex(index)
+
+    def load_tracks(self) -> None:
+        self.track_model.set_tracks(
+            self.database.list_tracks(),
+            self.database.list_track_adventure_memberships(),
+            self._visible_track_ids,
+        )
+        self.track_table.sortByColumn(2, Qt.SortOrder.DescendingOrder)
+        self.reload_track_adventure_filter()
+        self.update_track_visibility_header()
+
+    def reload_track_adventure_filter(self) -> None:
+        current = self.track_adventure_filter.currentData()
+        with QSignalBlocker(self.track_adventure_filter):
+            self.track_adventure_filter.clear()
+            self.track_adventure_filter.addItem("All", None)
+            self.track_adventure_filter.addItem("Standalone", "standalone")
+            for adventure in self.database.list_adventures():
+                self.track_adventure_filter.addItem(
+                    adventure.name, str(adventure.uuid)
+                )
+            index = self.track_adventure_filter.findData(current)
+            self.track_adventure_filter.setCurrentIndex(max(index, 0))
+        self.update_track_adventure_filter()
+
+    def update_track_adventure_filter(self) -> None:
+        self.track_proxy.set_adventure_filter(
+            self.track_adventure_filter.currentData()
+        )
+        self.update_track_visibility_header()
+
+    def update_track_search(self, text: str) -> None:
+        self.track_proxy.set_search_text(text)
+        self.update_track_visibility_header()
+
+    def _current_track_id(self) -> UUID | None:
+        index = self.track_table.currentIndex()
+        if not index.isValid():
+            return None
+        source = self.track_proxy.mapToSource(index)
+        return self.track_model.item(source.row(), 0).data(TRACK_ID_ROLE)
+
+    def _selected_track_ids(self) -> list[UUID]:
+        return [
+            self.track_model.item(
+                self.track_proxy.mapToSource(index).row(), 0
+            ).data(TRACK_ID_ROLE)
+            for index in self.track_table.selectionModel().selectedRows(1)
+        ]
+
+    def _select_track(self, track_id: UUID) -> None:
+        for row in range(self.track_model.rowCount()):
+            if self.track_model.item(row, 0).data(TRACK_ID_ROLE) == track_id:
+                index = self.track_proxy.mapFromSource(
+                    self.track_model.index(row, 1)
+                )
+                if not index.isValid():
+                    return
+                self.track_table.setCurrentIndex(index)
+                self.track_table.selectionModel().setCurrentIndex(
+                    index,
+                    QItemSelectionModel.SelectionFlag.ClearAndSelect
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
+                return
+
+    @staticmethod
+    def _header_state(values: list[bool]) -> Qt.CheckState:
+        if not values or not any(values):
+            return Qt.CheckState.Unchecked
+        if all(values):
+            return Qt.CheckState.Checked
+        return Qt.CheckState.PartiallyChecked
+
+    @staticmethod
+    def _set_header_state(
+        header: VisibilityHeaderCheckBox, values: list[bool]
+    ) -> None:
+        with QSignalBlocker(header):
+            header.setEnabled(bool(values))
+            header.setCheckState(MainWindow._header_state(values))
+
+    def update_collection_visibility_header(self) -> None:
+        self._set_header_state(
+            self.collection_visibility_header,
+            [
+                self.collection_list.item(row).checkState()
+                == Qt.CheckState.Checked
+                for row in range(self.collection_list.count())
+            ],
+        )
+
+    def update_adventure_visibility_header(self) -> None:
+        values = []
+        for row in range(self.adventure_list.count()):
+            item = self.adventure_list.item(row)
+            if self.database.list_adventure_tracks(
+                item.data(Qt.ItemDataRole.UserRole)
+            ):
+                values.append(item.checkState() == Qt.CheckState.Checked)
+        self._set_header_state(
+            self.adventure_visibility_header,
+            values,
+        )
+
+    def _proxy_visible_track_ids(self) -> list[UUID]:
+        return [
+            self.track_model.item(
+                self.track_proxy.mapToSource(
+                    self.track_proxy.index(row, 0)
+                ).row(), 0
+            ).data(TRACK_ID_ROLE)
+            for row in range(self.track_proxy.rowCount())
+        ]
+
+    def update_track_visibility_header(self) -> None:
+        ids = self._proxy_visible_track_ids()
+        self._set_header_state(
+            self.track_visibility_header,
+            [track_id in self._visible_track_ids for track_id in ids],
+        )
+
+    def set_all_collections_visible(self, state: int) -> None:
+        checked = Qt.CheckState(state) == Qt.CheckState.Checked
+        with QSignalBlocker(self.collection_list):
+            for row in range(self.collection_list.count()):
+                item = self.collection_list.item(row)
+                item.setCheckState(
+                    Qt.CheckState.Checked if checked
+                    else Qt.CheckState.Unchecked
+                )
+                collection_id = item.data(Qt.ItemDataRole.UserRole)
+                if checked:
+                    self._visible_collection_ids.add(collection_id)
+                else:
+                    self._visible_collection_ids.discard(collection_id)
+        self.update_collection_visibility_header()
+        self.refresh_map_visibility()
+
+    def set_all_adventures_visible(self, state: int) -> None:
+        checked = Qt.CheckState(state) == Qt.CheckState.Checked
+        track_ids = {
+            track.id
+            for row in range(self.adventure_list.count())
+            for track in self.database.list_adventure_tracks(
+                self.adventure_list.item(row).data(Qt.ItemDataRole.UserRole)
+            )
+        }
+        self.set_tracks_visibility(list(track_ids), checked)
+
+    def set_all_filtered_tracks_visible(self, state: int) -> None:
+        checked = Qt.CheckState(state) == Qt.CheckState.Checked
+        track_ids = self._proxy_visible_track_ids()
+        self.set_tracks_visibility(track_ids, checked)
+
+    def load_adventures(self) -> None:
+        with QSignalBlocker(self.adventure_list):
+            self.adventure_list.clear()
+            for adventure in self.database.list_adventures():
+                tracks = self.database.list_adventure_tracks(adventure.uuid)
+                item = QListWidgetItem(adventure.name)
+                item.setData(Qt.ItemDataRole.UserRole, adventure.uuid)
+                if tracks:
+                    item.setFlags(
+                        item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsUserTristate
+                    )
+                item.setCheckState(self._header_state([
+                    track.id in self._visible_track_ids for track in tracks
+                ]))
+                self.adventure_list.addItem(item)
+        self.update_adventure_visibility_header()
+
+    def reload_and_select_adventure(self, adventure_uuid: UUID) -> None:
+        self.load_adventures()
+        for index in range(self.adventure_list.count()):
+            item = self.adventure_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == adventure_uuid:
+                self.adventure_list.setCurrentItem(item)
+                return
+        self.adventure_editor.clear()
+
+    def create_adventure(self) -> None:
+        name, accepted = QInputDialog.getText(
+            self, "New Adventure", "Name:"
+        )
+        if not accepted or not name.strip():
+            return
+        adventure = Adventure(name.strip())
+        self.database.save_adventure(adventure)
+        self.load_adventures()
+        for index in range(self.adventure_list.count()):
+            item = self.adventure_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == adventure.uuid:
+                self.adventure_list.setCurrentItem(item)
+                break
+
+    def update_adventure_selection(
+        self, current: QListWidgetItem | None,
+        previous: QListWidgetItem | None = None,
+    ) -> None:
+        del previous
+        selected = current is not None
+        self.delete_adventure_button.setEnabled(selected)
+        self.adventure_editor.clear()
+        if current is None:
+            return
+        adventure_uuid = current.data(Qt.ItemDataRole.UserRole)
+        adventure = self.database.get_adventure(adventure_uuid)
+        if adventure is not None:
+            self.adventure_editor.show_adventure(
+                adventure, self.database.list_adventure_tracks(adventure_uuid),
+                self._visible_track_ids,
+            )
+            if self.data_tabs.currentIndex() == 2:
+                self.right_panel_stack.setCurrentIndex(2)
+
+    def update_adventure_visibility(self, item: QListWidgetItem) -> None:
+        adventure_uuid = item.data(Qt.ItemDataRole.UserRole)
+        track_ids = [
+            track.id
+            for track in self.database.list_adventure_tracks(adventure_uuid)
+        ]
+        self.set_tracks_visibility(
+            track_ids, item.checkState() != Qt.CheckState.Unchecked
+        )
+
+    def _effective_visible_track_ids(self) -> set[UUID]:
+        return set(self._visible_track_ids)
+
+    def _sync_effective_track_visibility(self) -> None:
+        effective = self._effective_visible_track_ids()
+        if self.map_window is not None:
+            for track_id in effective - self._shown_track_ids:
+                self._show_track_on_map(track_id)
+            for track_id in self._shown_track_ids - effective:
+                self.map_window.hide_track(track_id)
+        self._shown_track_ids = effective if self.map_window is not None else set()
+
+    def refresh_map_visibility(self) -> None:
+        self._sync_effective_track_visibility()
+        self._sync_collection_visibility()
+
+    def _sync_collection_visibility(self) -> None:
+        if self.map_window is not None:
+            for collection_id in (
+                self._visible_collection_ids - self._shown_collection_ids
+            ):
+                self._show_collection_on_map(collection_id)
+            for collection_id in (
+                self._shown_collection_ids - self._visible_collection_ids
+            ):
+                self.map_window.hide_collection(collection_id)
+        self._shown_collection_ids = (
+            set(self._visible_collection_ids)
+            if self.map_window is not None else set()
+        )
+
+    def save_adventure(self) -> None:
+        item = self.adventure_list.currentItem()
+        if item is None:
+            return
+        adventure = self.database.get_adventure(
+            item.data(Qt.ItemDataRole.UserRole)
+        )
+        name = self.adventure_editor.name_edit.text().strip()
+        if adventure is None or not name:
+            return
+        adventure.name = name
+        adventure.description = (
+            self.adventure_editor.description_edit.toPlainText()
+        )
+        self.database.update_adventure(adventure)
+        self.load_tracks()
+        self.load_adventures()
+        for index in range(self.adventure_list.count()):
+            candidate = self.adventure_list.item(index)
+            if candidate.data(Qt.ItemDataRole.UserRole) == adventure.uuid:
+                self.adventure_list.setCurrentItem(candidate)
+                break
+
+    def edit_adventure(self) -> None:
+        if self.adventure_list.currentItem() is not None:
+            self.right_panel_stack.setCurrentIndex(2)
+            self.adventure_editor.name_edit.setFocus()
+
+    def delete_adventure(self) -> None:
+        item = self.adventure_list.currentItem()
+        if item is None:
+            return
+        if QMessageBox.question(
+            self, "Delete Adventure", f'Delete Adventure "{item.text()}"?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        adventure_uuid = item.data(Qt.ItemDataRole.UserRole)
+        self.database.delete_adventure(adventure_uuid)
+        self.load_adventures()
+        self.adventure_editor.clear()
+        self.delete_adventure_button.setEnabled(False)
+        self.load_tracks()
+        self.refresh_track_visibility_views()
+
+    def add_selected_tracks_to_adventure(self) -> None:
+        adventure_item = self.adventure_list.currentItem()
+        if adventure_item is None:
+            return
+        adventure_uuid = adventure_item.data(Qt.ItemDataRole.UserRole)
+        existing = {
+            track.id for track in self.database.list_adventure_tracks(adventure_uuid)
+        }
+        for track_id in self._selected_track_ids():
+            if track_id not in existing:
+                self.database.add_track_to_adventure(adventure_uuid, track_id)
+        self.update_adventure_selection(adventure_item)
+        self.load_tracks()
+        self.refresh_track_visibility_views()
+
+    def add_selected_tracks_to_adventure_dialog(self) -> None:
+        track_ids = self._selected_track_ids()
+        adventures = self.database.list_adventures()
+        if not track_ids or not adventures:
+            return
+        names = [adventure.name for adventure in adventures]
+        name, accepted = QInputDialog.getItem(
+            self, "Add Tracks to Adventure", "Adventure:", names, 0, False
+        )
+        if not accepted:
+            return
+        adventure = adventures[names.index(name)]
+        self.database.add_tracks_to_adventure(adventure.uuid, track_ids)
+        self.load_tracks()
+        self.load_adventures()
+        self.refresh_track_visibility_views()
+
+    def remove_selected_tracks_from_adventure(self) -> None:
+        adventure_item = self.adventure_list.currentItem()
+        if adventure_item is None:
+            return
+        adventure_uuid = adventure_item.data(Qt.ItemDataRole.UserRole)
+        for track_id in self._selected_track_ids():
+            self.database.remove_track_from_adventure(
+                adventure_uuid, track_id
+            )
+        self.update_adventure_selection(adventure_item)
+        self.load_tracks()
+        self.refresh_track_visibility_views()
+
+    def add_existing_tracks_to_adventure(self) -> None:
+        adventure_item = self.adventure_list.currentItem()
+        if adventure_item is None:
+            return
+        adventure_uuid = adventure_item.data(Qt.ItemDataRole.UserRole)
+        existing = {
+            track.id for track in self.database.list_adventure_tracks(adventure_uuid)
+        }
+        dialog = AddTracksDialog(
+            [track for track in self.database.list_tracks() if track.id not in existing],
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.database.add_tracks_to_adventure(
+            adventure_uuid, dialog.selected_track_ids
+        )
+        self.load_tracks()
+        self.update_adventure_selection(adventure_item)
+        self.refresh_track_visibility_views()
+
+    def remove_editor_track_from_adventure(self) -> None:
+        adventure_item = self.adventure_list.currentItem()
+        track_ids = self.adventure_editor.selected_track_ids()
+        if adventure_item is None or not track_ids:
+            return
+        adventure_id = adventure_item.data(Qt.ItemDataRole.UserRole)
+        for track_id in track_ids:
+            self.database.remove_track_from_adventure(adventure_id, track_id)
+        self.load_tracks()
+        self.update_adventure_selection(adventure_item)
+        self.refresh_track_visibility_views()
+
+    def move_adventure_track(self, offset: int) -> None:
+        adventure_item = self.adventure_list.currentItem()
+        current_row = self.adventure_editor.current_track_row()
+        if adventure_item is None or current_row < 0:
+            return
+        adventure_uuid = adventure_item.data(Qt.ItemDataRole.UserRole)
+        tracks = self.database.list_adventure_tracks(adventure_uuid)
+        target_row = current_row + offset
+        if not 0 <= target_row < len(tracks):
+            return
+        tracks[current_row], tracks[target_row] = tracks[target_row], tracks[current_row]
+        selected_id = tracks[target_row].id
+        self.database.set_adventure_track_order(
+            adventure_uuid, [track.id for track in tracks]
+        )
+        self.update_adventure_selection(adventure_item)
+        self.adventure_editor.select_track(selected_id)
+
+    def import_tracks_into_selected_adventure(self) -> None:
+        item = self.adventure_list.currentItem()
+        if item is None:
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import Tracks into Adventure", "", "GPX files (*.gpx)"
+        )
+        if not paths:
+            return
+        adventure_uuid = item.data(Qt.ItemDataRole.UserRole)
+        try:
+            tracks = import_gpx_files_to_adventure(
+                self.database, paths, adventure_uuid
+            )
+        except (GpxReaderError, sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self, "Import Tracks failed", f"Tracks could not be imported:\n{exc}"
+            )
+            return
+        self.load_tracks()
+        self.update_adventure_selection(item)
+        self.refresh_track_visibility_views()
+        adventure = self.database.get_adventure(adventure_uuid)
+        QMessageBox.information(
+            self, "Import Tracks",
+            f'Imported:\n- {len(paths)} GPX files\n- {len(tracks)} Tracks\n'
+            f'- added to Adventure "{adventure.name}"',
+        )
+
+    def update_track_selection(
+        self,
+        current_item,
+        previous_item=None,
+    ) -> None:
+        del previous_item
+        selected = current_item.isValid()
+        self.delete_track_button.setEnabled(selected)
+        self.zoom_track_button.setEnabled(selected)
+        self.track_editor.clear()
+        if not selected:
+            return
+        source = self.track_proxy.mapToSource(current_item)
+        track_id = self.track_model.item(source.row(), 0).data(TRACK_ID_ROLE)
+        track = self.database.get_track(track_id)
+        if track is not None:
+            self.track_editor.show_track(
+                track, self.database.list_track_points(track_id)
+            )
+
+    def update_track_visibility(self, track_id: UUID, visible: bool) -> None:
+        self.set_track_visibility(track_id, visible)
+
+    def get_track_visibility(self, track_id: UUID) -> bool:
+        return track_id in self._visible_track_ids
+
+    def set_track_visibility(self, track_id: UUID, visible: bool) -> None:
+        self.set_tracks_visibility([track_id], visible)
+
+    def set_tracks_visibility(
+        self, track_ids: list[UUID], visible: bool
+    ) -> None:
+        for track_id in track_ids:
+            if visible:
+                self._visible_track_ids.add(track_id)
+            else:
+                self._visible_track_ids.discard(track_id)
+        self.refresh_track_visibility_views()
+        self.refresh_map_visibility()
+
+    def refresh_track_visibility_views(self) -> None:
+        self.track_model._loading = True
+        try:
+            for row in range(self.track_model.rowCount()):
+                item = self.track_model.item(row, 0)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if item.data(TRACK_ID_ROLE) in self._visible_track_ids
+                    else Qt.CheckState.Unchecked
+                )
+        finally:
+            self.track_model._loading = False
+        for track_id in {
+            self.adventure_editor.track_model.item(row, 0).data(TRACK_ID_ROLE)
+            for row in range(self.adventure_editor.track_model.rowCount())
+        }:
+            self.adventure_editor.set_track_visibility(
+                track_id, track_id in self._visible_track_ids
+            )
+        self._refresh_adventure_check_states()
+        self.update_track_visibility_header()
+
+    def _refresh_adventure_check_states(self) -> None:
+        with QSignalBlocker(self.adventure_list):
+            for row in range(self.adventure_list.count()):
+                item = self.adventure_list.item(row)
+                tracks = self.database.list_adventure_tracks(
+                    item.data(Qt.ItemDataRole.UserRole)
+                )
+                item.setCheckState(self._header_state([
+                    track.id in self._visible_track_ids for track in tracks
+                ]))
+        self.update_adventure_visibility_header()
+
+    def _show_track_on_map(self, track_id: UUID) -> None:
+        if self.map_window is None:
+            return
+        track = self.database.get_track(track_id)
+        if track is not None:
+            self.map_window.show_track(
+                track, self.database.list_track_points(track_id)
+            )
+
+    def import_track_gpx_file(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import Track GPX", "", "GPX files (*.gpx)"
+        )
+        if not paths:
+            return
+        adventures = self.database.list_adventures()
+        choices = ["Standalone Tracks"] + [
+            f'Adventure: {item.name}' for item in adventures
+        ] + ["New Adventure"]
+        choice, accepted = QInputDialog.getItem(
+            self, "Track Import", "Import destination:", choices, 0, False
+        )
+        if not accepted:
+            return
+        try:
+            if choice == "Standalone Tracks":
+                tracks = import_gpx_files(self.database, paths)
+            elif choice == "New Adventure":
+                name, named = QInputDialog.getText(
+                    self, "New Adventure", "Name:"
+                )
+                if not named or not name.strip():
+                    return
+                description, described = QInputDialog.getMultiLineText(
+                    self, "New Adventure", "Description (optional):"
+                )
+                if not described:
+                    return
+                adventure = Adventure(name.strip(), description=description)
+                tracks = import_gpx_files_to_adventure(
+                    self.database, paths, adventure.uuid,
+                    new_adventure=adventure,
+                )
+                self.load_adventures()
+            else:
+                adventure = adventures[choices.index(choice) - 1]
+                tracks = import_gpx_files_to_adventure(
+                    self.database, paths, adventure.uuid
+                )
+        except (GpxReaderError, sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self, "Import Track failed", f"The Track could not be imported:\n{exc}"
+            )
+            return
+        self.load_tracks()
+        if tracks:
+            self.set_tracks_visibility([track.id for track in tracks], True)
+            self._select_track(tracks[0].id)
+
+    def delete_selected_track(self) -> None:
+        track_id = self._current_track_id()
+        if track_id is None:
+            return
+        answer = QMessageBox.question(
+            self, "Delete Track", "Delete selected Track?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        adventure_item = self.adventure_list.currentItem()
+        selected_adventure_uuid = (
+            adventure_item.data(Qt.ItemDataRole.UserRole)
+            if adventure_item is not None else None
+        )
+        self.database.delete_track(track_id)
+        self._visible_track_ids.discard(track_id)
+        if self.map_window is not None:
+            self.map_window.hide_track(track_id)
+        self._shown_track_ids.discard(track_id)
+        self.load_tracks()
+        if selected_adventure_uuid is not None:
+            self.reload_and_select_adventure(selected_adventure_uuid)
+        else:
+            self.load_adventures()
+        self._sync_effective_track_visibility()
+
+    def save_track(self) -> None:
+        track_id = self._current_track_id()
+        if track_id is None:
+            return
+        track = self.database.get_track(track_id)
+        if track is None:
+            return
+        name = self.track_editor.name_edit.text().strip()
+        color = QColor(self.track_editor.color_edit.text())
+        if not name or not color.isValid():
+            QMessageBox.warning(
+                self, "Invalid Track", "Track name and color must be valid."
+            )
+            return
+        track.name = name
+        track.color = color.name(QColor.NameFormat.HexRgb).upper()
+        self.database.update_track(track)
+        if track_id in self._effective_visible_track_ids():
+            self._show_track_on_map(track_id)
+        self.load_tracks()
+        self._select_track(track_id)
+
+    def zoom_to_selected_track(self) -> None:
+        track_id = self._current_track_id()
+        if track_id is None:
+            return
+        if track_id not in self._visible_track_ids:
+            self.set_track_visibility(track_id, True)
+        if self.map_window is not None:
+            self.map_window.zoom_to_track(track_id)
 
     def create_collection(self) -> None:
         dialog = CollectionCreateDialog(self)
@@ -236,6 +1022,7 @@ class MainWindow(QMainWindow):
                 f"The Collection could not be created:\n{exc}",
             )
             return
+        self._visible_collection_ids.add(collection.id)
         self.reload_and_select_collection(collection.id)
 
     def change_user_data_folder(self) -> None:
@@ -389,16 +1176,41 @@ class MainWindow(QMainWindow):
             )
             return False
 
-        self.collection_list.clear()
-        for collection in collections:
-            item = QListWidgetItem(collection.name)
-            item.setData(Qt.ItemDataRole.UserRole, collection.id)
-            self.collection_list.addItem(item)
+        if not self._visible_collection_ids and self.collection_list.count() == 0:
+            self._visible_collection_ids.update(item.id for item in collections)
+        with QSignalBlocker(self.collection_list):
+            self.collection_list.clear()
+            for collection in collections:
+                item = QListWidgetItem(collection.name)
+                item.setData(Qt.ItemDataRole.UserRole, collection.id)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if collection.id in self._visible_collection_ids
+                    else Qt.CheckState.Unchecked
+                )
+                self.collection_list.addItem(item)
         self.merge_collections_button.setEnabled(
             self.collection_list.count() >= 2
         )
         self._update_move_waypoints_button()
+        self.update_collection_visibility_header()
         return True
+
+    def update_collection_visibility(self, item: QListWidgetItem) -> None:
+        collection_id = item.data(Qt.ItemDataRole.UserRole)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._visible_collection_ids.add(collection_id)
+        else:
+            self._visible_collection_ids.discard(collection_id)
+        self.update_collection_visibility_header()
+        self.refresh_map_visibility()
+
+    def _show_collection_on_map(self, collection_id: UUID) -> None:
+        if self.map_window is not None:
+            self.map_window.show_collection(
+                collection_id, self.database.list_waypoints(collection_id)
+            )
 
     def open_merge_dialog(self) -> None:
         current_item = self.collection_list.currentItem()
@@ -508,6 +1320,13 @@ class MainWindow(QMainWindow):
             )
             self.map_window.destroyed.connect(self._map_window_destroyed)
         self.map_window.set_waypoints(self._map_waypoints)
+        for collection_id in self._visible_collection_ids:
+            self._show_collection_on_map(collection_id)
+        self._shown_collection_ids = set(self._visible_collection_ids)
+        self._shown_track_ids.clear()
+        for track_id in self._effective_visible_track_ids():
+            self._show_track_on_map(track_id)
+            self._shown_track_ids.add(track_id)
         self.map_window.set_selected_waypoint_ids(
             self._selected_waypoint_ids
         )
@@ -520,6 +1339,8 @@ class MainWindow(QMainWindow):
 
     def _map_window_destroyed(self) -> None:
         self.map_window = None
+        self._shown_track_ids.clear()
+        self._shown_collection_ids.clear()
 
     def _set_map_waypoints(
         self,
@@ -529,9 +1350,13 @@ class MainWindow(QMainWindow):
         self._map_waypoints = list(waypoints)
         if self.map_window is not None:
             self.map_window.set_waypoints(
-                self._map_waypoints,
-                fit_viewport=fit_viewport,
+                self._map_waypoints, fit_viewport=fit_viewport
             )
+        item = self.collection_list.currentItem()
+        if item is not None:
+            collection_id = item.data(Qt.ItemDataRole.UserRole)
+            if collection_id in self._visible_collection_ids:
+                self._show_collection_on_map(collection_id)
 
     def _update_map_waypoint(self, waypoint: Waypoint) -> None:
         self._map_waypoints = [
@@ -540,9 +1365,13 @@ class MainWindow(QMainWindow):
         ]
         if self.map_window is not None:
             self.map_window.set_waypoints(
-                self._map_waypoints,
-                fit_viewport=False,
+                self._map_waypoints, fit_viewport=False
             )
+            item = self.collection_list.currentItem()
+            if item is not None:
+                self._show_collection_on_map(
+                    item.data(Qt.ItemDataRole.UserRole)
+                )
 
     def _sync_map_selection(self) -> None:
         self._selected_waypoint_ids = [
@@ -1086,6 +1915,10 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._visible_collection_ids.discard(collection_id)
+        if self.map_window is not None:
+            self.map_window.hide_collection(collection_id)
+
         self.load_collections()
         if self.collection_list.count() > 0:
             self.collection_list.setCurrentRow(
@@ -1343,6 +2176,7 @@ class MainWindow(QMainWindow):
             dialog.created_collection_id or dialog.merged_target_id
         )
         if selected_collection_id is not None:
+            self._visible_collection_ids.add(selected_collection_id)
             self.reload_and_select_collection(selected_collection_id)
 
     def export_gpx_file(self) -> None:

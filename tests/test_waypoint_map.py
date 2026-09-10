@@ -17,6 +17,7 @@ from wpt_manager.map_sources import (
 )
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.models.icon import IconInfo
+from wpt_manager.models.track import Track, TrackPoint
 
 
 def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
@@ -169,6 +170,64 @@ def test_changing_map_source_does_not_change_waypoint_dataset():
     assert waypoint_map._pending_update
     assert waypoint_map._map_source_payload["id"] == "mapy-basic"
 
+    waypoint_map.close()
+    application.processEvents()
+
+
+def test_multiple_track_layers_are_independent_and_keep_other_payloads(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    waypoint_map = WaypointMap()
+    scripts = []
+    monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
+    waypoint_map._page_loaded = True
+    waypoint_map._map_ready = True
+    waypoint_map._view_visible = True
+    waypoint = Waypoint("Place", 50, 14)
+    waypoint_map.set_waypoints([waypoint], fit_viewport=False)
+    waypoint_map.set_search_result("Result", 49, 13)
+    first = Track("First", "a.gpx", color="#112233")
+    second = Track("Second", "b.gpx", color="#445566")
+    waypoint_map.upsert_track(
+        first,
+        [TrackPoint(50, 14, 0, segment_index=0),
+         TrackPoint(51, 15, 1, segment_index=1)],
+    )
+    waypoint_map.upsert_track(second, [TrackPoint(51, 15, 0)])
+
+    assert set(waypoint_map._track_payloads) == {str(first.id), str(second.id)}
+    assert '"color": "#112233"' in scripts[-2]
+    waypoint_payload = list(waypoint_map._waypoint_payload)
+    search_payload = dict(waypoint_map._search_result_payload)
+    waypoint_map.remove_track(first.id)
+    assert set(waypoint_map._track_payloads) == {str(second.id)}
+    assert scripts[-1] == f'window.removeTrack("{first.id}");'
+    assert waypoint_map._waypoint_payload == waypoint_payload
+    assert waypoint_map._search_result_payload == search_payload
+
+    waypoint_map.zoom_to_track(second.id)
+    assert scripts[-1] == f'window.zoomToTrack("{second.id}");'
+    assert "trackLayersById" in MAP_HTML
+    assert "pointsBySegment" in MAP_HTML
+    assert "L.featureGroup(polylines).getBounds()" in MAP_HTML
+    assert "map.removeLayer(baseTileLayer)" in MAP_HTML
+    waypoint_map.close()
+    application.processEvents()
+
+
+def test_map_provider_change_keeps_collection_track_and_search_datasets():
+    application = QApplication.instance() or QApplication([])
+    waypoint_map = WaypointMap()
+    collection_id = uuid4()
+    waypoint = Waypoint("Place", 50, 14)
+    track = Track("Track", "track.gpx")
+    waypoint_map.upsert_collection(collection_id, [waypoint])
+    waypoint_map.upsert_track(track, [TrackPoint(51, 15, 0)])
+    waypoint_map.set_search_result("Search", 49, 13)
+    source, _ = resolve_map_source("mapy-basic", "test-key")
+    waypoint_map.set_map_source(source)
+    assert str(collection_id) in waypoint_map._collection_payloads
+    assert str(track.id) in waypoint_map._track_payloads
+    assert waypoint_map._search_result_payload["name"] == "Search"
     waypoint_map.close()
     application.processEvents()
 

@@ -99,10 +99,17 @@ Activate that environment and build the windowed `onedir` distribution:
 .\packaging\build_windows.ps1
 ```
 
+Package the existing audited onedir build as an internal test ZIP:
+
+```powershell
+.\packaging\package_windows.ps1
+```
+
 The audited artifact is created in `dist/WPT-Manager/`. Copy the complete
 directory to the target Windows PC. It does not require a separately installed
-Python interpreter. This is an internal `onedir` build, not a public v0.1
-release or installer.
+Python interpreter. The package command creates
+`dist/WPT-Manager-0.1.0-win64.zip`. These are internal `onedir` artifacts, not
+a public v0.1 release or installer.
 
 ## User data folder and configuration
 

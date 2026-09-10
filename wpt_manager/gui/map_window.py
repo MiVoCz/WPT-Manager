@@ -39,6 +39,7 @@ from wpt_manager.mapy_search import (
 )
 from wpt_manager.models.icon import IconInfo
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.models.track import Track, TrackPoint
 from wpt_manager.validation.waypoint_duplicates import geographic_distance_m
 
 
@@ -93,6 +94,7 @@ class MapWindow(QMainWindow):
         self._selected_search_result: MapSearchResult | None = None
         self._search_result_types: tuple[str, ...] = ()
         self._search_reference_point: tuple[float, float] | None = None
+        self._tracks: dict[UUID, tuple[Track, list[TrackPoint]]] = {}
 
         central_widget = QWidget(self)
         central_layout = QVBoxLayout(central_widget)
@@ -471,7 +473,30 @@ class MapWindow(QMainWindow):
         waypoints: list[Waypoint],
         fit_viewport: bool = True,
     ) -> None:
-        self.waypoint_map.set_waypoints(waypoints, fit_viewport)
+        self.waypoint_map.set_active_waypoints(waypoints, fit_viewport)
+
+    def show_collection(
+        self, collection_id: UUID, waypoints: list[Waypoint]
+    ) -> None:
+        self.waypoint_map.upsert_collection(collection_id, waypoints)
+
+    def hide_collection(self, collection_id: UUID) -> None:
+        self.waypoint_map.remove_collection(collection_id)
+
+    def show_track(
+        self,
+        track: Track,
+        points: list[TrackPoint],
+    ) -> None:
+        self._tracks[track.id] = (track, list(points))
+        self.waypoint_map.upsert_track(track, points)
+
+    def hide_track(self, track_id: UUID) -> None:
+        self._tracks.pop(track_id, None)
+        self.waypoint_map.remove_track(track_id)
+
+    def zoom_to_track(self, track_id: UUID) -> None:
+        self.waypoint_map.zoom_to_track(track_id)
 
     def set_selected_waypoint_ids(self, waypoint_ids: list[UUID]) -> None:
         self.selected_waypoint_ids = list(waypoint_ids)

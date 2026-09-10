@@ -1,12 +1,15 @@
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
 from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.models.track import Track, TrackPoint
+from wpt_manager.models.adventure import Adventure
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 6
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -43,6 +46,18 @@ class Database:
                 if version == 1:
                     self._migrate_schema_1_to_2(connection)
                     version = 2
+                elif version == 2:
+                    self._migrate_schema_2_to_3(connection)
+                    version = 3
+                elif version == 3:
+                    self._migrate_schema_3_to_4(connection)
+                    version = 4
+                elif version == 4:
+                    self._migrate_schema_4_to_5(connection)
+                    version = 5
+                elif version == 5:
+                    self._migrate_schema_5_to_6(connection)
+                    version = 6
                 else:
                     raise DatabaseSchemaError(
                         f"Unsupported database schema version: {version}."
@@ -82,7 +97,28 @@ class Database:
                 "PRAGMA table_info(waypoints)"
             ).fetchall()
         }
-        version = 2 if "created_at" in waypoint_columns else 1
+        if {"tracks", "track_points"}.issubset(tables):
+            track_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(tracks)"
+                ).fetchall()
+            }
+            if "color" not in track_columns:
+                version = 3
+            else:
+                point_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(track_points)"
+                    ).fetchall()
+                }
+                if "segment_index" not in point_columns:
+                    version = 4
+                else:
+                    version = 6 if "adventures" in tables else 5
+        else:
+            version = 2 if "created_at" in waypoint_columns else 1
         connection.execute(f"PRAGMA user_version = {version}")
         return version
 
@@ -119,6 +155,117 @@ class Database:
                 )
             """
         )
+        Database._create_track_tables(connection)
+        Database._create_adventure_tables(connection)
+
+    @staticmethod
+    def _create_adventure_tables(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE adventures (
+                uuid TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE adventure_tracks (
+                adventure_uuid TEXT NOT NULL,
+                track_uuid TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                PRIMARY KEY (adventure_uuid, track_uuid),
+                FOREIGN KEY (adventure_uuid) REFERENCES adventures(uuid)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (track_uuid) REFERENCES tracks(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+
+    @staticmethod
+    def _create_track_tables(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE tracks (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                start_time TEXT,
+                end_time TEXT,
+                distance_m REAL NOT NULL,
+                point_count INTEGER NOT NULL,
+                color TEXT NOT NULL DEFAULT '#2563EB'
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE track_points (
+                track_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                elevation REAL,
+                time TEXT,
+                segment_index INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (track_id, sequence),
+                FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    @staticmethod
+    def _migrate_schema_2_to_3(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE tracks (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                start_time TEXT,
+                end_time TEXT,
+                distance_m REAL NOT NULL,
+                point_count INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE track_points (
+                track_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                elevation REAL,
+                time TEXT,
+                PRIMARY KEY (track_id, sequence),
+                FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    @staticmethod
+    def _migrate_schema_3_to_4(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE tracks ADD COLUMN color TEXT NOT NULL "
+            "DEFAULT '#2563EB'"
+        )
+
+    @staticmethod
+    def _migrate_schema_4_to_5(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE track_points ADD COLUMN segment_index "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+
+    @staticmethod
+    def _migrate_schema_5_to_6(connection: sqlite3.Connection) -> None:
+        Database._create_adventure_tables(connection)
 
     @staticmethod
     def _migrate_schema_1_to_2(
@@ -548,5 +695,353 @@ class Database:
         except Exception:
             connection.rollback()
             raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _datetime_text(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    @staticmethod
+    def _track_from_row(row: tuple) -> Track:
+        return Track(
+            id=UUID(row[0]),
+            name=row[1],
+            source_file=row[2],
+            created_at=datetime.fromisoformat(row[3]),
+            start_time=datetime.fromisoformat(row[4]) if row[4] else None,
+            end_time=datetime.fromisoformat(row[5]) if row[5] else None,
+            distance_m=row[6],
+            point_count=row[7],
+            color=row[8],
+        )
+
+    def save_track(self, track: Track) -> None:
+        self.save_tracks([track])
+
+    def save_tracks(self, tracks: list[Track]) -> None:
+        connection = self._connect()
+        try:
+            with connection:
+                for track in tracks:
+                    self._insert_track(connection, track)
+        finally:
+            connection.close()
+
+    def _insert_track(
+        self, connection: sqlite3.Connection, track: Track
+    ) -> None:
+        connection.execute(
+                        """
+                        INSERT INTO tracks (
+                            id, name, source_file, created_at, start_time,
+                            end_time, distance_m, point_count, color
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(track.id), track.name, track.source_file,
+                            self._datetime_text(track.created_at),
+                            self._datetime_text(track.start_time),
+                            self._datetime_text(track.end_time),
+                            track.distance_m, track.point_count, track.color,
+                        ),
+        )
+        connection.executemany(
+                        """
+                        INSERT INTO track_points (
+                            track_id, sequence, latitude, longitude,
+                            elevation, time, segment_index
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (
+                                str(track.id), point.sequence,
+                                point.latitude, point.longitude,
+                                point.elevation,
+                                self._datetime_text(point.time),
+                                point.segment_index,
+                            )
+                            for point in track.points
+                        ],
+        )
+
+    def save_tracks_to_adventure(
+        self,
+        tracks: list[Track],
+        adventure_uuid: UUID,
+        new_adventure: Adventure | None = None,
+    ) -> None:
+        connection = self._connect()
+        try:
+            with connection:
+                if new_adventure is not None:
+                    connection.execute(
+                        "INSERT INTO adventures "
+                        "(uuid, name, description, created_at) VALUES (?, ?, ?, ?)",
+                        (str(new_adventure.uuid), new_adventure.name,
+                         new_adventure.description,
+                         self._datetime_text(new_adventure.created_at)),
+                    )
+                next_sequence = connection.execute(
+                    "SELECT COALESCE(MAX(sequence), -1) + 1 "
+                    "FROM adventure_tracks WHERE adventure_uuid = ?",
+                    (str(adventure_uuid),),
+                ).fetchone()[0]
+                for offset, track in enumerate(tracks):
+                    self._insert_track(connection, track)
+                    connection.execute(
+                        "INSERT INTO adventure_tracks "
+                        "(adventure_uuid, track_uuid, sequence) VALUES (?, ?, ?)",
+                        (str(adventure_uuid), str(track.id), next_sequence + offset),
+                    )
+        finally:
+            connection.close()
+
+    def get_track(self, track_id: UUID) -> Track | None:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT id, name, source_file, created_at, start_time, "
+                "end_time, distance_m, point_count, color FROM tracks WHERE id = ?",
+                (str(track_id),),
+            ).fetchone()
+        finally:
+            connection.close()
+        return self._track_from_row(row) if row is not None else None
+
+    def list_tracks(self) -> list[Track]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT id, name, source_file, created_at, start_time, "
+                "end_time, distance_m, point_count, color FROM tracks "
+                "ORDER BY created_at DESC, name COLLATE NOCASE ASC"
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._track_from_row(row) for row in rows]
+
+    def update_track(self, track: Track) -> None:
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                "UPDATE tracks SET name = ?, color = ? WHERE id = ?",
+                (track.name, track.color, str(track.id)),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Track does not exist: {track.id}")
+            connection.commit()
+        finally:
+            connection.close()
+
+    def delete_track(self, track_id: UUID) -> None:
+        connection = self._connect()
+        try:
+            connection.execute("DELETE FROM tracks WHERE id = ?", (str(track_id),))
+            connection.commit()
+        finally:
+            connection.close()
+
+    def list_track_points(self, track_id: UUID) -> list[TrackPoint]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT latitude, longitude, sequence, elevation, time, "
+                "segment_index "
+                "FROM track_points WHERE track_id = ? ORDER BY sequence",
+                (str(track_id),),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            TrackPoint(
+                latitude=row[0], longitude=row[1], sequence=row[2],
+                elevation=row[3],
+                time=datetime.fromisoformat(row[4]) if row[4] else None,
+                segment_index=row[5],
+            )
+            for row in rows
+        ]
+
+    def save_adventure(self, adventure: Adventure) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "INSERT INTO adventures (uuid, name, description, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (str(adventure.uuid), adventure.name, adventure.description,
+                 self._datetime_text(adventure.created_at)),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _adventure_from_row(row: tuple) -> Adventure:
+        return Adventure(
+            uuid=UUID(row[0]), name=row[1], description=row[2] or "",
+            created_at=datetime.fromisoformat(row[3]),
+        )
+
+    def get_adventure(self, adventure_uuid: UUID) -> Adventure | None:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT uuid, name, description, created_at FROM adventures "
+                "WHERE uuid = ?", (str(adventure_uuid),),
+            ).fetchone()
+        finally:
+            connection.close()
+        return self._adventure_from_row(row) if row else None
+
+    def list_adventures(self) -> list[Adventure]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT uuid, name, description, created_at FROM adventures "
+                "ORDER BY name COLLATE NOCASE, uuid"
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._adventure_from_row(row) for row in rows]
+
+    def update_adventure(self, adventure: Adventure) -> None:
+        connection = self._connect()
+        try:
+            cursor = connection.execute(
+                "UPDATE adventures SET name = ?, description = ? WHERE uuid = ?",
+                (adventure.name, adventure.description, str(adventure.uuid)),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Adventure does not exist: {adventure.uuid}")
+            connection.commit()
+        finally:
+            connection.close()
+
+    def delete_adventure(self, adventure_uuid: UUID) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM adventures WHERE uuid = ?", (str(adventure_uuid),)
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def add_track_to_adventure(
+        self, adventure_uuid: UUID, track_uuid: UUID
+    ) -> None:
+        connection = self._connect()
+        try:
+            sequence = connection.execute(
+                "SELECT COALESCE(MAX(sequence), -1) + 1 FROM adventure_tracks "
+                "WHERE adventure_uuid = ?", (str(adventure_uuid),),
+            ).fetchone()[0]
+            connection.execute(
+                "INSERT INTO adventure_tracks "
+                "(adventure_uuid, track_uuid, sequence) VALUES (?, ?, ?)",
+                (str(adventure_uuid), str(track_uuid), sequence),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def add_tracks_to_adventure(
+        self, adventure_uuid: UUID, track_uuids: list[UUID]
+    ) -> None:
+        unique_ids = list(dict.fromkeys(track_uuids))
+        connection = self._connect()
+        try:
+            with connection:
+                existing = {
+                    UUID(row[0]) for row in connection.execute(
+                        "SELECT track_uuid FROM adventure_tracks "
+                        "WHERE adventure_uuid = ?", (str(adventure_uuid),)
+                    ).fetchall()
+                }
+                next_sequence = connection.execute(
+                    "SELECT COALESCE(MAX(sequence), -1) + 1 "
+                    "FROM adventure_tracks WHERE adventure_uuid = ?",
+                    (str(adventure_uuid),),
+                ).fetchone()[0]
+                for track_uuid in unique_ids:
+                    if track_uuid in existing:
+                        continue
+                    connection.execute(
+                        "INSERT INTO adventure_tracks "
+                        "(adventure_uuid, track_uuid, sequence) VALUES (?, ?, ?)",
+                        (str(adventure_uuid), str(track_uuid), next_sequence),
+                    )
+                    next_sequence += 1
+        finally:
+            connection.close()
+
+    def remove_track_from_adventure(
+        self, adventure_uuid: UUID, track_uuid: UUID
+    ) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM adventure_tracks WHERE adventure_uuid = ? "
+                "AND track_uuid = ?", (str(adventure_uuid), str(track_uuid)),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def list_adventure_tracks(self, adventure_uuid: UUID) -> list[Track]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT t.id, t.name, t.source_file, t.created_at, t.start_time, "
+                "t.end_time, t.distance_m, t.point_count, t.color FROM tracks t "
+                "JOIN adventure_tracks a ON a.track_uuid = t.id "
+                "WHERE a.adventure_uuid = ? ORDER BY a.sequence, t.id",
+                (str(adventure_uuid),),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._track_from_row(row) for row in rows]
+
+    def list_track_adventure_memberships(
+        self,
+    ) -> dict[UUID, list[Adventure]]:
+        memberships: dict[UUID, list[Adventure]] = {}
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT at.track_uuid, a.uuid, a.name, a.description, "
+                "a.created_at FROM adventure_tracks at "
+                "JOIN adventures a ON a.uuid = at.adventure_uuid "
+                "ORDER BY a.name COLLATE NOCASE, a.uuid"
+            ).fetchall()
+        finally:
+            connection.close()
+        for row in rows:
+            memberships.setdefault(UUID(row[0]), []).append(
+                self._adventure_from_row(row[1:])
+            )
+        return memberships
+
+    def set_adventure_track_order(
+        self, adventure_uuid: UUID, track_uuids: list[UUID]
+    ) -> None:
+        connection = self._connect()
+        try:
+            with connection:
+                existing = {
+                    UUID(row[0]) for row in connection.execute(
+                        "SELECT track_uuid FROM adventure_tracks "
+                        "WHERE adventure_uuid = ?", (str(adventure_uuid),)
+                    ).fetchall()
+                }
+                if len(track_uuids) != len(set(track_uuids)) or set(track_uuids) != existing:
+                    raise ValueError("Track order must contain every Adventure track once.")
+                for sequence, track_uuid in enumerate(track_uuids):
+                    connection.execute(
+                        "UPDATE adventure_tracks SET sequence = ? "
+                        "WHERE adventure_uuid = ? AND track_uuid = ?",
+                        (sequence, str(adventure_uuid), str(track_uuid)),
+                    )
         finally:
             connection.close()

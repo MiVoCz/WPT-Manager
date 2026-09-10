@@ -17,6 +17,7 @@ from wpt_manager.map_sources import (
     resolve_map_source,
 )
 from wpt_manager.models.waypoint import Waypoint
+from wpt_manager.models.track import Track, TrackPoint
 
 
 LOGGER = logging.getLogger(__name__)
@@ -146,7 +147,11 @@ MAP_HTML = """<!DOCTYPE html>
     let markerLayer = null;
     let searchMarkerLayer = null;
     let searchMarker = null;
+    let trackLayer = null;
+    let trackLayersById = new Map();
     let markersById = new Map();
+    let collectionLayersById = new Map();
+    let collectionWaypointIds = new Map();
     let selectedWaypointIds = new Set();
     let mapyLogoControl = null;
     let bridge = null;
@@ -240,6 +245,7 @@ MAP_HTML = """<!DOCTYPE html>
       map = L.map("map").setView(DEFAULT_CENTER, DEFAULT_ZOOM);
       markerLayer = L.layerGroup().addTo(map);
       searchMarkerLayer = L.layerGroup().addTo(map);
+      trackLayer = L.layerGroup().addTo(map);
       map.getContainer().addEventListener("click", event => {
         const target = event.target;
         const link = target instanceof Element
@@ -361,6 +367,59 @@ MAP_HTML = """<!DOCTYPE html>
       }
     };
 
+    window.upsertCollection = function(collection) {
+      if (!map || !markerLayer) return;
+      window.removeCollection(collection.id);
+      const layer = L.layerGroup().addTo(markerLayer);
+      const waypointIds = [];
+      for (const waypoint of collection.waypoints) {
+        const background = ["circle", "square", "octagon"].includes(
+          waypoint.background
+        ) ? waypoint.background : "square";
+        const shell = L.DomUtil.create("div", "waypoint-marker");
+        const shape = L.DomUtil.create(
+          "div", "wpt-marker-shape " + background, shell
+        );
+        shape.style.backgroundColor = waypoint.color;
+        if (waypoint.iconSvgUrl) {
+          const image = L.DomUtil.create("img", "", shape);
+          image.src = waypoint.iconSvgUrl;
+        }
+        const marker = L.marker([waypoint.latitude, waypoint.longitude], {
+          icon: L.divIcon({className: "wpt-marker-icon", html: shell,
+            iconSize: [32, 32], iconAnchor: [16, 16]})
+        });
+        marker.bindTooltip(waypoint.name);
+        marker.on("click", () => bridge && bridge.markerClicked(waypoint.id));
+        marker.on("contextmenu", event => {
+          if (!bridge) return;
+          event.originalEvent.preventDefault();
+          L.DomEvent.stopPropagation(event.originalEvent);
+          bridge.markerContextMenu(
+            waypoint.id,
+            event.originalEvent.clientX,
+            event.originalEvent.clientY
+          );
+        });
+        marker.addTo(layer);
+        markersById.set(waypoint.id, marker);
+        waypointIds.push(waypoint.id);
+        applyMarkerSelection(waypoint.id, marker);
+      }
+      collectionLayersById.set(collection.id, layer);
+      collectionWaypointIds.set(collection.id, waypointIds);
+    };
+
+    window.removeCollection = function(collectionId) {
+      const layer = collectionLayersById.get(collectionId);
+      if (layer && markerLayer) markerLayer.removeLayer(layer);
+      for (const waypointId of collectionWaypointIds.get(collectionId) || []) {
+        markersById.delete(waypointId);
+      }
+      collectionLayersById.delete(collectionId);
+      collectionWaypointIds.delete(collectionId);
+    };
+
     window.setSearchResult = function(result) {
       if (!map || !searchMarkerLayer) return;
       searchMarkerLayer.clearLayers();
@@ -382,6 +441,48 @@ MAP_HTML = """<!DOCTYPE html>
       map.setView(
         [result.latitude, result.longitude],
         Math.max(map.getZoom(), 15)
+      );
+    };
+
+    window.upsertTrack = function(track) {
+      if (!map || !trackLayer) return;
+      const oldLayers = trackLayersById.get(track.id) || [];
+      for (const oldLayer of oldLayers) trackLayer.removeLayer(oldLayer);
+      const pointsBySegment = new Map();
+      for (const point of track.points) {
+        if (!pointsBySegment.has(point.segmentIndex)) {
+          pointsBySegment.set(point.segmentIndex, []);
+        }
+        pointsBySegment.get(point.segmentIndex).push(
+          [point.latitude, point.longitude]
+        );
+      }
+      if (pointsBySegment.size === 0) {
+        trackLayersById.delete(track.id);
+        return;
+      }
+      const polylines = [];
+      for (const coordinates of pointsBySegment.values()) {
+        polylines.push(L.polyline(
+          coordinates, {color: track.color, weight: 4}
+        ).addTo(trackLayer));
+      }
+      trackLayersById.set(track.id, polylines);
+    };
+
+    window.removeTrack = function(trackId) {
+      if (!trackLayer) return;
+      const polylines = trackLayersById.get(trackId) || [];
+      for (const polyline of polylines) trackLayer.removeLayer(polyline);
+      trackLayersById.delete(trackId);
+    };
+
+    window.zoomToTrack = function(trackId) {
+      if (!map) return;
+      const polylines = trackLayersById.get(trackId) || [];
+      if (polylines.length > 0) map.fitBounds(
+        L.featureGroup(polylines).getBounds(),
+        {padding: [20, 20], maxZoom: 16}
       );
     };
 
@@ -516,8 +617,12 @@ class WaypointMap(MapWebView):
             )
         self._icon_data_urls = icon_data_urls or {}
         self._waypoint_payload: list[dict[str, str | float | None]] = []
+        self._collection_payloads: dict[str, dict[str, object]] = {}
+        self._pending_collections = False
         self._selected_waypoint_ids: list[str] = []
         self._search_result_payload: dict[str, str | float] | None = None
+        self._track_payloads: dict[str, dict[str, object]] = {}
+        self._pending_track = False
         self._map_source_payload = self._source_payload(initial_map_source)
         self._page_loaded = False
         self._map_ready = False
@@ -609,12 +714,74 @@ class WaypointMap(MapWebView):
         self._pending_update = True
         self._flush_pending_waypoints()
 
+    def set_active_waypoints(
+        self, waypoints: list[Waypoint], fit_viewport: bool = False
+    ) -> None:
+        self._waypoint_payload = [
+            self._waypoint_payload_item(waypoint) for waypoint in waypoints
+        ]
+        self._pending_fit_viewport = fit_viewport
+        self._pending_update = False
+
     def set_selected_waypoint_ids(self, waypoint_ids: list[UUID]) -> None:
         self._selected_waypoint_ids = [
             str(waypoint_id) for waypoint_id in waypoint_ids
         ]
         self._pending_selection = True
         self._flush_pending_selection()
+
+    def upsert_collection(
+        self, collection_id: UUID, waypoints: list[Waypoint]
+    ) -> None:
+        payload = {
+            "id": str(collection_id),
+            "waypoints": [self._waypoint_payload_item(item) for item in waypoints],
+        }
+        self._collection_payloads[str(collection_id)] = payload
+        self._pending_collections = True
+        self._flush_pending_collections()
+
+    def remove_collection(self, collection_id: UUID) -> None:
+        self._collection_payloads.pop(str(collection_id), None)
+        if self._page_loaded and self._map_ready and self._view_visible:
+            self._execute_javascript(
+                f"window.removeCollection({json.dumps(str(collection_id))});"
+            )
+
+    def upsert_track(
+        self,
+        track: Track,
+        points: list[TrackPoint],
+    ) -> None:
+        track_id = str(track.id)
+        self._track_payloads[track_id] = {
+            "id": track_id,
+            "color": track.color,
+            "points": [
+                {
+                    "latitude": point.latitude,
+                    "longitude": point.longitude,
+                    "segmentIndex": point.segment_index,
+                }
+                for point in points
+            ],
+        }
+        self._pending_track = True
+        self._flush_pending_track()
+        self._flush_pending_collections()
+
+    def remove_track(self, track_id: UUID) -> None:
+        self._track_payloads.pop(str(track_id), None)
+        if self._page_loaded and self._map_ready and self._view_visible:
+            self._execute_javascript(
+                f"window.removeTrack({json.dumps(str(track_id))});"
+            )
+
+    def zoom_to_track(self, track_id: UUID) -> None:
+        if self._page_loaded and self._map_ready and self._view_visible:
+            self._execute_javascript(
+                f"window.zoomToTrack({json.dumps(str(track_id))});"
+            )
 
     def set_map_source(self, source: ResolvedMapSource) -> None:
         self._map_source_payload = self._source_payload(source)
@@ -634,11 +801,15 @@ class WaypointMap(MapWebView):
         }
         self._pending_search_result = True
         self._flush_pending_search_result()
+        self._flush_pending_track()
+        self._flush_pending_collections()
 
     def clear_search_result(self) -> None:
         self._search_result_payload = None
         self._pending_search_result = True
         self._flush_pending_search_result()
+        self._flush_pending_track()
+        self._flush_pending_collections()
 
     def _handle_load_finished(self, loaded: bool) -> None:
         self._page_loaded = loaded
@@ -651,6 +822,7 @@ class WaypointMap(MapWebView):
         self._flush_pending_waypoints()
         self._flush_pending_selection()
         self._flush_pending_search_result()
+        self._flush_pending_track()
 
     def _handle_map_ready(self) -> None:
         self._map_ready = True
@@ -727,6 +899,43 @@ class WaypointMap(MapWebView):
         payload = json.dumps(self._search_result_payload, ensure_ascii=False)
         self._execute_javascript(f"window.setSearchResult({payload});")
         self._pending_search_result = False
+
+    def _flush_pending_track(self) -> None:
+        if not (
+            self._pending_track
+            and self._page_loaded
+            and self._map_ready
+            and self._view_visible
+        ):
+            return
+        for payload in self._track_payloads.values():
+            self._execute_javascript(
+                f"window.upsertTrack({json.dumps(payload)});"
+            )
+        self._pending_track = False
+
+    def _flush_pending_collections(self) -> None:
+        if not (
+            self._pending_collections and self._page_loaded
+            and self._map_ready and self._view_visible
+        ):
+            return
+        for payload in self._collection_payloads.values():
+            self._execute_javascript(
+                f"window.upsertCollection({json.dumps(payload)});"
+            )
+        self._pending_collections = False
+
+    def _waypoint_payload_item(
+        self, waypoint: Waypoint
+    ) -> dict[str, str | float | None]:
+        return {
+            "id": str(waypoint.id), "name": waypoint.name,
+            "latitude": waypoint.latitude, "longitude": waypoint.longitude,
+            "icon": waypoint.icon, "color": waypoint.color,
+            "background": waypoint.background,
+            "iconSvgUrl": self._icon_data_urls.get(waypoint.icon),
+        }
 
     @staticmethod
     def _source_payload(source: ResolvedMapSource) -> dict[str, str | int | None]:

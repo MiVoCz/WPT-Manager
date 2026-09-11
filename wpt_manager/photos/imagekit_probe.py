@@ -3,10 +3,10 @@
 import argparse
 import base64
 import json
-import os
 import re
 from typing import Any
 
+from wpt_manager.credential_store import CredentialStoreError, get_imagekit_private_key
 from wpt_manager.photos.imagekit import ImageKitError, ImageKitPhotoSource, embedded_value
 
 
@@ -44,13 +44,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--folder", help="Exact folder path; subfolders are not included")
     parser.add_argument("--debug-metadata", action="store_true")
     args = parser.parse_args(argv)
-    key = os.environ.get("IMAGEKIT_PRIVATE_KEY", "")
+    try:
+        key = get_imagekit_private_key()
+    except CredentialStoreError:
+        print("Credential store unavailable")
+        return 1
+    if not key:
+        print("ImageKit private API key is not configured.")
+        return 1
 
     def output(label: str, value: Any) -> None:
         print(f"{label}: {redact_metadata(value, key)}")
 
     try:
-        source = ImageKitPhotoSource(folder=args.folder)
+        source = ImageKitPhotoSource(private_key=key, folder=args.folder)
         items = source.list_photos()
     except ImageKitError as exc:
         output("ImageKit connection", "FAILED")

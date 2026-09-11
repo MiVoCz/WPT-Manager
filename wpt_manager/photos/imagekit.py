@@ -5,13 +5,13 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 import math
-import os
 import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from wpt_manager.credential_store import CredentialStoreError, get_imagekit_private_key
 from wpt_manager.photos.source import PhotoAuthenticationError, PhotoSourceError, PhotoSourceItem
 
 
@@ -184,15 +184,18 @@ class ImageKitPhotoSource:
         self, private_key: str | None = None, *, folder: str | None = None,
         page_size: int = 1000, timeout: float = 15.0,
     ) -> None:
-        """An explicit key takes precedence; None falls back to the environment."""
-        key = private_key if private_key is not None else os.environ.get("IMAGEKIT_PRIVATE_KEY")
+        """An explicit key takes precedence; otherwise use the credential resolver."""
+        try:
+            key = private_key if private_key is not None else get_imagekit_private_key()
+        except CredentialStoreError:
+            raise ImageKitError("Credential store unavailable") from None
         if not isinstance(key, str) or not key.strip():
-            raise ImageKitAuthenticationError("ImageKit private API key is missing.")
+            raise ImageKitAuthenticationError("ImageKit private API key is not configured.")
         if not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 1000:
             raise ValueError("ImageKit page_size must be between 1 and 1000.")
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("ImageKit timeout must be positive and finite.")
-        self._private_key = key
+        self._private_key = key.strip()
         self.folder = folder
         self.page_size = page_size
         self.timeout = timeout
@@ -233,6 +236,15 @@ class ImageKitPhotoSource:
         if not isinstance(assets, list) or any(not isinstance(asset, dict) for asset in assets):
             raise ImageKitUnexpectedResponseError("ImageKit asset list must be an array of objects.")
         return assets
+
+    def test_connection(self) -> None:
+        """Request just one file without pagination or photo metadata mapping."""
+        previous_size = self.page_size
+        try:
+            self.page_size = 1
+            self._page(0)
+        finally:
+            self.page_size = previous_size
 
     def list_photos(self) -> list[PhotoSourceItem]:
         self._items_by_id = {}

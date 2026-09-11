@@ -80,6 +80,7 @@ from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.models.track import Track, TrackPoint
 from wpt_manager.models.adventure import Adventure
 from wpt_manager.gui.imagekit_import_dialog import ImageKitImportDialog
+from wpt_manager.gui.imagekit_settings_dialog import ImageKitSettingsDialog
 from wpt_manager.photos.auto_assign import apply_photo_matches, match_summary, preview_photo_matches
 from wpt_manager.photos.photo_track_matcher import PhotoTrackMatcher
 from wpt_manager.paths import create_application_settings, store_user_data_directory
@@ -94,6 +95,9 @@ def application_restart_command() -> tuple[str, list[str]]:
 
 
 class MainWindow(QMainWindow):
+    def open_imagekit_settings(self) -> None:
+        ImageKitSettingsDialog(self).exec()
+
     def __init__(
         self,
         database: Database,
@@ -115,6 +119,9 @@ class MainWindow(QMainWindow):
         )
         self.setWindowTitle("WPT-Manager")
         settings_menu = self.menuBar().addMenu("Settings")
+        self.imagekit_settings_action = QAction("ImageKit...", self)
+        settings_menu.addAction(self.imagekit_settings_action)
+        self.imagekit_settings_action.triggered.connect(self.open_imagekit_settings)
         self.user_data_folder_action = QAction(
             "User data folder...",
             self,

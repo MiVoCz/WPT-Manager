@@ -216,7 +216,7 @@ are redacted.
 `wpt_manager.photos.imagekit.ImageKitPhotoSource` uses Basic authentication
 (private key as username, empty password) against `GET https://api.imagekit.io/v1/files`.
 `IMAGEKIT_URL_ENDPOINT` is not required. An explicit constructor `private_key`
-takes precedence over the environment; `None` uses the environment and an empty
+takes precedence over the resolver; `None` uses the environment then OS credential store, and an empty
 key raises `ImageKitAuthenticationError`. HTTP redirects are rejected.
 
 Folder filtering uses the official `path` parameter (exact folder, no recursive
@@ -386,3 +386,31 @@ WPT-Manager is licensed under the [MIT License](LICENSE).
 Mapy.com map content is subject to Mapy.com's terms. OpenStreetMap attribution
 must be preserved. Users are responsible for the licensing and permitted use
 of icons they place in the `icons/` directory of their user data folder.
+
+
+## ImageKit credentials
+
+Open **Settings ? ImageKit... ? Private API key**. The input is masked;
+existing credentials appear only as a fixed `Saved credential` placeholder.
+Save stores a new, trimmed key in the OS credential store (Windows Credential
+Manager on Windows), under service `WPT-Manager`, username `imagekit_private_key`.
+Saving without editing preserves the saved key; **Remove saved key** deletes it
+immediately (Cancel does not undo removal). Secrets are never stored in config.json
+or QSettings.
+
+**Test connection** tests a newly entered key, otherwise the effective credential,
+using one authorized list-files request (limit 1) in a worker thread. It does not
+save the key. Results distinguish Connected, Invalid API key, Network error and
+Unexpected API error. An unavailable OS store is reported without backend details.
+
+Development and the CLI probe can still use `IMAGEKIT_PRIVATE_KEY`.
+A nonblank environment variable overrides the stored credential; whitespace-only
+values are ignored. The dialog indicates this override without displaying the value.
+Both ImageKit import and `python -m wpt_manager.photos.imagekit_probe` use this
+same resolver. No database migration is needed.
+
+
+The project's PyInstaller keyring hook collects backend modules and keyring
+metadata. The native Windows backend is also explicitly imported by the credential
+store; no additional spec customization is needed. A frozen build and a real
+Credential Manager round trip still require manual verification.

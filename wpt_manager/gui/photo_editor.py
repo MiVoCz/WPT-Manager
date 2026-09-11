@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 
 from wpt_manager.models.photo import Photo
 from wpt_manager.models.track import Track
+from wpt_manager.gui.photo_preview import PhotoPreview
 
 
 class PhotoEditor(QGroupBox):
@@ -18,8 +19,7 @@ class PhotoEditor(QGroupBox):
         self.name_edit = QLineEdit()
         self.description_edit = QPlainTextEdit()
         self.track_combo = QComboBox()
-        self.preview_label = QLabel("Preview unavailable")
-        self.preview_label.setMinimumHeight(160)
+        self.preview_label = PhotoPreview(self)
         self.taken_at_edit = QLineEdit()
         self.latitude_edit = QLineEdit()
         self.longitude_edit = QLineEdit()
@@ -35,6 +35,7 @@ class PhotoEditor(QGroupBox):
             widget.setReadOnly(True)
         self.save_button = QPushButton("Save")
         layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Preview"))
         layout.addWidget(self.preview_label)
         form = QFormLayout()
         form.addRow("Name", self.name_edit)
@@ -64,9 +65,7 @@ class PhotoEditor(QGroupBox):
         self.source_type_edit.setText(photo.source_type)
         self.source_url_edit.setText(photo.source_url or "")
         self.external_id_edit.setText(photo.external_id or "")
-        self.preview_label.setText(
-            "Thumbnail available" if photo.thumbnail_url else "Preview unavailable"
-        )
+        self.preview_label.show_photo(photo)
         self._set_enabled(True)
 
     def clear(self, tracks: list[Track]) -> None:
@@ -79,7 +78,7 @@ class PhotoEditor(QGroupBox):
             self.external_id_edit,
         ):
             widget.clear()
-        self.preview_label.setText("Preview unavailable")
+        self.preview_label.show_photo(None)
         self._set_enabled(False)
 
     def _set_tracks(self, tracks: list[Track], selected: UUID | None) -> None:

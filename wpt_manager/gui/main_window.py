@@ -60,9 +60,7 @@ from wpt_manager.gui.photo_editor import PhotoEditor
 from wpt_manager.gui.photo_table import (
     PHOTO_ID_ROLE, PhotoFilterProxyModel, PhotoTableModel,
 )
-from wpt_manager.gui.synology_import_dialog import (
-    SynologyCredentialsDialog, SynologyPhotoSelectionDialog,
-)
+
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.gpx_track_importer import (
@@ -81,13 +79,7 @@ from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.models.track import Track, TrackPoint
 from wpt_manager.models.adventure import Adventure
-from wpt_manager.photos.import_service import import_source_items
-from wpt_manager.photos.source import (
-    PhotoSourceError, SynologyApiAddressRequiredError,
-    SynologyAuthenticationError,
-    SynologyUnexpectedResponseError,
-)
-from wpt_manager.photos.synology import SynologyPhotoSource
+from wpt_manager.gui.imagekit_import_dialog import ImageKitImportDialog
 from wpt_manager.paths import create_application_settings, store_user_data_directory
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
@@ -236,7 +228,7 @@ class MainWindow(QMainWindow):
         self.photo_search_edit.setPlaceholderText("Search photos")
         self.photo_track_filter = QComboBox()
         self.photo_adventure_filter = QComboBox()
-        self.import_synology_button = QPushButton("Import from Synology...")
+        self.import_imagekit_button = QPushButton("Import from ImageKit...")
         photo_panel = QGroupBox("Photos")
         photo_layout = QVBoxLayout(photo_panel)
         photo_filters = QHBoxLayout()
@@ -248,7 +240,7 @@ class MainWindow(QMainWindow):
         photo_filters.addWidget(self.photo_adventure_filter)
         photo_layout.addLayout(photo_filters)
         photo_layout.addWidget(self.photo_table)
-        photo_layout.addWidget(self.import_synology_button)
+        photo_layout.addWidget(self.import_imagekit_button)
 
         self.data_tabs = QTabWidget()
         self.data_tabs.addTab(collection_panel, "Collections")
@@ -431,9 +423,7 @@ class MainWindow(QMainWindow):
             self.update_photo_filters
         )
         self.photo_editor.save_requested.connect(self.save_photo)
-        self.import_synology_button.clicked.connect(
-            self.import_photos_from_synology
-        )
+        self.import_imagekit_button.clicked.connect(self.import_photos_from_imagekit)
         self.load_collections()
         self.load_tracks()
         self.load_adventures()
@@ -543,57 +533,10 @@ class MainWindow(QMainWindow):
             return
         self.load_photos(photo.id)
 
-    def import_photos_from_synology(self) -> None:
-        credentials = SynologyCredentialsDialog(self)
-        if credentials.exec() != QDialog.DialogCode.Accepted:
-            return
-        try:
-            source = SynologyPhotoSource(
-                credentials.url_edit.text().strip(),
-                credentials.password_edit.text(),
-                nas_api_base_url=(
-                    credentials.nas_url_edit.text().strip() or None
-                ),
-            )
-            items = source.list_photos()
-        except PhotoSourceError as exc:
-            if isinstance(exc, SynologyAuthenticationError):
-                summary = "Synology share authentication failed."
-            elif isinstance(exc, SynologyApiAddressRequiredError):
-                summary = (
-                    "QuickConnect share links require the NAS/DDNS address "
-                    "for Synology Photos API access."
-                )
-            elif isinstance(exc, SynologyUnexpectedResponseError):
-                summary = (
-                    "Synology returned an unexpected web page instead of "
-                    "photo data."
-                )
-            else:
-                summary = "Photos could not be loaded from Synology."
-            message = QMessageBox(self)
-            message.setIcon(QMessageBox.Icon.Critical)
-            message.setWindowTitle("Synology Photos")
-            message.setText(summary)
-            message.setDetailedText(str(exc))
-            message.exec()
-            return
-        selection = SynologyPhotoSelectionDialog(items, self)
-        if selection.exec() != QDialog.DialogCode.Accepted:
-            return
-        try:
-            imported = import_source_items(
-                self.database, source, selection.selected_items
-            )
-        except sqlite3.Error as exc:
-            QMessageBox.critical(
-                self, "Synology Photos", f"Photos could not be imported:\n{exc}"
-            )
-            return
-        self.load_photos(imported[0].id if imported else None)
-        QMessageBox.information(
-            self, "Synology Photos", f"Imported Photos: {len(imported)}"
-        )
+    def import_photos_from_imagekit(self) -> None:
+        dialog = ImageKitImportDialog(self.database, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.load_photos(dialog.imported[0].id if dialog.imported else None)
 
     def load_tracks(self) -> None:
         self.track_model.set_tracks(

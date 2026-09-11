@@ -175,7 +175,10 @@ therefore keeps its Photos and makes them Standalone.
 
 Remote providers implement the `PhotoSource` protocol and return neutral
 `PhotoSourceItem` values. The GUI, database model, and import service do not
-depend on Synology response objects. The initial `SynologyPhotoSource` supports
+depend on provider response objects. ImageKit is the supported external import
+in the Photos GUI. Synology import controls and dialogs have been removed;
+existing Synology Photos remain readable, editable and eligible for previews.
+The retained developer-only `SynologyPhotoSource` supports
 password-protected shared links through an isolated HTTP transport and response
 parser; no password, token, or cookie is persisted.
 
@@ -190,6 +193,91 @@ URL supplies its API host automatically. A QuickConnect-only web address is not
 used as a DSM API endpoint; its share ID must be paired with an explicit NAS or
 DDNS address. Synology Photos API details can vary by DSM/Photos release, so the
 provider transport and parser remain separate for adaptation to real responses.
+
+## ImageKit setup (read-only developer integration)
+
+Use a restricted **read-only private API key** with permission to list Media
+Library files. Set it in the current PowerShell session; never commit the key
+or put it in `config.json`:
+
+```powershell
+$env:IMAGEKIT_PRIVATE_KEY="private_xxx"
+python -m wpt_manager.photos.imagekit_probe --folder "/ITA_2026/"
+python -m wpt_manager.photos.imagekit_probe --folder "/ITA_2026/" --debug-metadata
+```
+
+The probe only reads remote data and never opens or changes the local database.
+It prints asset/image counts and up to five photos. Debug mode prints sanitized
+`embeddedMetadata` and `customMetadata` from the first asset, even if it is not
+an image. Review diagnostics before sharing: camera, GPS and other descriptive
+metadata are intentionally visible; credentials, token fields and URL queries
+are redacted.
+
+`wpt_manager.photos.imagekit.ImageKitPhotoSource` uses Basic authentication
+(private key as username, empty password) against `GET https://api.imagekit.io/v1/files`.
+`IMAGEKIT_URL_ENDPOINT` is not required. An explicit constructor `private_key`
+takes precedence over the environment; `None` uses the environment and an empty
+key raises `ImageKitAuthenticationError`. HTTP redirects are rejected.
+
+Folder filtering uses the official `path` parameter (exact folder, no recursive
+subfolders). Omit `folder` to list all folders. `page_size` (1–1000, default 1000)
+controls API `limit`; `skip` advances until the final page. `timeout` defaults to
+15 seconds per request. Assets found counts returned files before image filtering;
+images found counts unique mapped images. Folders, videos and unidentified files
+are skipped. HEIC/HEIF are accepted when provider image type/MIME identifies them;
+no image decoding is performed.
+
+Mapping preserves `fileId`, name, delivery URLs and raw metadata, including size,
+dimensions, camera EXIF and custom metadata. `DateTimeOriginal` accepts EXIF and
+ISO datetime formats. A timezone-free original time uses `OffsetTimeOriginal`
+when valid; the resulting offset is preserved, matching Photo persistence.
+ISO timestamps with `Z` stay UTC. Without a valid offset the time stays naive;
+no upload timestamp is substituted. GPS supports decimal values and three DMS
+components (numeric or rational strings). S/W references supply a missing minus
+sign without reversing an already negative coordinate. Altitude references accept
+numeric/string 0/1 and `Above Sea Level` / `Below Sea Level` (case-insensitive).
+Missing or invalid values remain `None`. Flat and grouped EXIF dictionaries are
+supported. The official [list API](https://imagekit.io/docs/api-reference/digital-asset-management-dam/list-and-search-assets)
+and [DAM examples](https://imagekit.io/docs/dam/overview) document the response;
+actual GPS/EXIF contents depend on the asset. A user-run probe verified a live
+collection of 55 assets/images, including decimal GPS coordinates, numeric
+altitude, textual altitude references and original time offsets. Automated tests
+use mocked HTTP; use the debug probe to inspect other collections.
+
+The existing `import_source_items(database, source, selected_items)` service can
+save selected items locally with `source_type="imagekit"`, `external_id=fileId`
+and `track_uuid=None`. The existing database uniqueness constraint prevents
+duplicates. Provider metadata stays in `PhotoSourceItem`; the existing `Photo`
+database model has no raw-metadata field. No schema change is needed.
+
+In **Photos → Import from ImageKit...**, enter a folder (default `/`), click
+**Load**, select one or more images and click **Import**. The result reports
+`Imported: N` and `Skipped duplicates: N`. The dialog uses the environment key;
+it does not store credentials in the database or display provider error details.
+Changing the folder clears the previous selection. A missing `thumbnailUrl`
+stays `None` in the database.
+
+The Photo editor loads previews asynchronously with `QNetworkAccessManager`.
+It prefers `thumbnail_url`, otherwise `source_url`. For ImageKit without a
+thumbnail, `build_imagekit_preview_url` adds a delivery query transformation
+`tr=w-600,h-400,c-at_max`, preserving other query parameters and chaining any
+existing query transformation. ImageKit's
+[max-size transformation](https://imagekit.io/docs/image-resize-and-crop)
+preserves aspect ratio without cropping. No transformed file is stored.
+Local file URLs/absolute paths and legacy Synology URLs are also supported.
+
+Selection changes abort pending requests and ignore stale replies. Each editor
+keeps up to 32 downscaled previews in memory; resizing only rescales the cached
+pixmap. Downloads have a 15-second timeout and a 10 MiB size limit. Failures show
+a generic status without exposing URLs or credentials. There is no disk cache.
+Signed URLs may reject added transformations if their signatures cover the
+transformation; the application does not re-sign URLs or fall back to downloading
+ImageKit originals. Preview format support depends on the installed Qt codecs.
+
+Uploads, remote edits/deletes, video, disk thumbnail cache, track
+matching and background synchronization are not implemented. Listing is
+synchronous, keeps mapped metadata in memory, and has no automatic retry or
+snapshot guarantee if the library changes during offset pagination.
 
 ## Known issues
 
@@ -221,7 +309,7 @@ the top-level windows. Waypoint selection and editing are not affected.
 - `wpt_manager/models/` — Collection, waypoint, Track, Adventure, Photo,
   duplicate, merge, and icon data models.
 - `wpt_manager/photos/` — provider-neutral PhotoSource API, source-item import,
-  Synology shared-link provider, and diagnostic probe.
+  Synology shared-link and ImageKit read-only providers, and diagnostic probes.
 - `wpt_manager/io/` — GPX import/export and icon catalog loading.
 - `wpt_manager/validation/` — waypoint validation and geographic duplicate
   detection.

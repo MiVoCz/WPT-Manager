@@ -279,6 +279,66 @@ matching and background synchronization are not implemented. Listing is
 synchronous, keeps mapped metadata in memory, and has no automatic retry or
 snapshot guarantee if the library changes during offset pagination.
 
+## Bulk manual Photo assignment
+
+The Photos table supports Ctrl/Shift selection and Ctrl+A for all visible rows.
+One selected Photo uses the full editor. With multiple Photos selected, only
+Track assignment is enabled; metadata is cleared and the preview request is
+cancelled. No selection clears and disables the editor.
+
+The Track combo shows the common assignment, or **Multiple values** for mixed
+assignments. Mixed values require choosing Standalone or a Track before
+**Apply to Selected** is enabled. Changing the combo alone never saves changes.
+Apply changes only `track_uuid` for selected Photo UUIDs in one database
+transaction, including explicitly replacing existing assignments. Standalone
+stores NULL. A status-bar message reports the affected count.
+
+After refreshing the model and filters, selection is restored only for UUIDs
+still visible. Photos excluded by the new Track/Adventure/Standalone filter
+are deselected. Bulk name, description and other metadata editing is not supported.
+
+## Match Photos to Tracks
+
+In Photos, **Match Photos to Tracks** evaluates all locally stored Photos against
+all Tracks (independent of table filters and Track visibility). A summary shows
+scanned, matched, ambiguous, no-match, already-assigned and no-timestamp counts.
+**Cancel** writes nothing; **Apply** saves only unambiguous matches, then refreshes
+the Photos table and its derived Track/Adventure labels once. Existing assignments
+are skipped, including assignments made after the preview was computed.
+
+`wpt_manager/photos/photo_track_matcher.py` contains the pure matcher. It indexes
+actual timed Track points once, derives ranges from them, and uses `bisect` for
+nearest timestamp lookup. Track header dates alone are not sufficient. Primary
+ranking is absolute time difference from Photo `taken_at` (ImageKit
+`DateTimeOriginal`), followed by GPS distance when available and Track UUID.
+The existing geographic distance helper supplies haversine distances.
+
+Default limits are named constants: Track time margin **300 seconds**, nearest
+point delta **300 seconds**, GPS distance **2000 meters**. When another candidate
+is within **10 seconds** of the best time delta and, when GPS is available,
+within **100 meters** of its distance, the result is ambiguous and stays unchanged.
+An exact UUID tie-break never overrides this ambiguity safeguard. GPS only
+validates the nearest timed point(s); it cannot select a more distant timestamp.
+
+Comparisons normalize timezone-aware values to UTC without changing persisted
+timestamps. Missing, malformed or naive photo times yield `No timestamp`; unsafe
+Track point times are ignored. Missing Photo GPS permits time-only matching;
+partial/invalid Photo GPS is conservatively rejected. With valid Photo GPS,
+a candidate needs valid GPS on a nearest timed point. No coordinates are inferred
+or interpolated. Uncertain Standalone Photos remain Standalone.
+
+The `photos/auto_assign.py` helpers separate preview from persistence, use the
+existing Database API, and default to `overwrite_existing=False`. Explicit helper
+callers can enable replacement; the GUI does not. Matching uses local metadata
+only and makes no network calls. Manual assignment remains available.
+
+Limitations: fixed thresholds, no camera-clock correction, no interpolation, and
+no assignment provenance beyond whether a Track is already assigned. Indexing and
+matching run synchronously; nearest lookup is O(log N) per candidate Track, while
+range filtering visits each Track. Applying uses individual existing database
+updates, so a database failure can leave earlier successful assignments saved;
+the GUI reports the error and refreshes the table for review.
+
 ## Known issues
 
 - On Windows with multiple monitors, the first change of a closed Search Type

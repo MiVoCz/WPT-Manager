@@ -1159,6 +1159,20 @@ class Database:
         finally:
             connection.close()
 
+    def set_photos_track(self, photo_uuids: list[UUID], track_uuid: UUID | None) -> int:
+        """Change only Track assignment, atomically for all existing selected Photos."""
+        connection = self._connect()
+        try:
+            with connection:
+                cursor = connection.executemany(
+                    "UPDATE photos SET track_uuid = ? WHERE uuid = ?",
+                    [(str(track_uuid) if track_uuid is not None else None, str(photo_id))
+                     for photo_id in dict.fromkeys(photo_uuids)],
+                )
+            return cursor.rowcount
+        finally:
+            connection.close()
+
     def get_photo(self, photo_uuid: UUID) -> Photo | None:
         connection = self._connect()
         try:

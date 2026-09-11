@@ -80,6 +80,8 @@ from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.models.track import Track, TrackPoint
 from wpt_manager.models.adventure import Adventure
 from wpt_manager.gui.imagekit_import_dialog import ImageKitImportDialog
+from wpt_manager.photos.auto_assign import apply_photo_matches, match_summary, preview_photo_matches
+from wpt_manager.photos.photo_track_matcher import PhotoTrackMatcher
 from wpt_manager.paths import create_application_settings, store_user_data_directory
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
@@ -217,7 +219,7 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.photo_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.photo_model = PhotoTableModel()
         self.photo_proxy = PhotoFilterProxyModel()
@@ -229,6 +231,7 @@ class MainWindow(QMainWindow):
         self.photo_track_filter = QComboBox()
         self.photo_adventure_filter = QComboBox()
         self.import_imagekit_button = QPushButton("Import from ImageKit...")
+        self.match_photos_button = QPushButton("Match Photos to Tracks")
         photo_panel = QGroupBox("Photos")
         photo_layout = QVBoxLayout(photo_panel)
         photo_filters = QHBoxLayout()
@@ -241,6 +244,7 @@ class MainWindow(QMainWindow):
         photo_layout.addLayout(photo_filters)
         photo_layout.addWidget(self.photo_table)
         photo_layout.addWidget(self.import_imagekit_button)
+        photo_layout.addWidget(self.match_photos_button)
 
         self.data_tabs = QTabWidget()
         self.data_tabs.addTab(collection_panel, "Collections")
@@ -412,7 +416,7 @@ class MainWindow(QMainWindow):
             self.set_all_adventures_visible
         )
         self.data_tabs.currentChanged.connect(self.switch_editor)
-        self.photo_table.selectionModel().currentRowChanged.connect(
+        self.photo_table.selectionModel().selectionChanged.connect(
             self.update_photo_selection
         )
         self.photo_search_edit.textChanged.connect(self.update_photo_filters)
@@ -423,7 +427,9 @@ class MainWindow(QMainWindow):
             self.update_photo_filters
         )
         self.photo_editor.save_requested.connect(self.save_photo)
+        self.photo_editor.bulk_assignment_requested.connect(self.assign_selected_photos_track)
         self.import_imagekit_button.clicked.connect(self.import_photos_from_imagekit)
+        self.match_photos_button.clicked.connect(self.match_photos_to_tracks)
         self.load_collections()
         self.load_tracks()
         self.load_adventures()
@@ -433,20 +439,26 @@ class MainWindow(QMainWindow):
         self.right_panel_stack.setCurrentIndex(index)
 
     def load_photos(self, selected_id: UUID | None = None) -> None:
-        if selected_id is None:
-            selected_id = self._current_photo_id()
+        selected = [selected_id] if selected_id is not None else self._selected_photo_ids()
         tracks = self.database.list_tracks()
-        self.photo_model.set_photos(
-            self.database.list_photos(),
-            {track.id: track for track in tracks},
-            self.database.list_track_adventure_memberships(),
-        )
-        self.photo_table.sortByColumn(1, Qt.SortOrder.DescendingOrder)
-        self.reload_photo_filters(tracks)
-        if selected_id is not None:
-            self._select_photo(selected_id)
-        elif not self.photo_table.currentIndex().isValid():
-            self.photo_editor.clear(tracks)
+        selection = self.photo_table.selectionModel()
+        with QSignalBlocker(selection):
+            self.photo_model.set_photos(
+                self.database.list_photos(),
+                {track.id: track for track in tracks},
+                self.database.list_track_adventure_memberships(),
+            )
+            self.photo_table.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+            self.reload_photo_filters(tracks)
+            selection.clearSelection()
+            for row in range(self.photo_proxy.rowCount()):
+                index = self.photo_proxy.index(row, 0)
+                if index.data(PHOTO_ID_ROLE) in selected:
+                    selection.select(index, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+            visible = selection.selectedRows(0)
+            if visible:
+                selection.setCurrentIndex(visible[0], QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.update_photo_selection()
 
     def reload_photo_filters(self, tracks: list[Track] | None = None) -> None:
         tracks = tracks if tracks is not None else self.database.list_tracks()
@@ -482,12 +494,13 @@ class MainWindow(QMainWindow):
             adventure=self.photo_adventure_filter.currentData(),
         )
 
+    def _selected_photo_ids(self) -> list[UUID]:
+        return [index.data(PHOTO_ID_ROLE)
+                for index in self.photo_table.selectionModel().selectedRows(0)]
+
     def _current_photo_id(self) -> UUID | None:
-        index = self.photo_table.currentIndex()
-        if not index.isValid():
-            return None
-        source = self.photo_proxy.mapToSource(index)
-        return self.photo_model.item(source.row(), 0).data(PHOTO_ID_ROLE)
+        selected = self._selected_photo_ids()
+        return selected[0] if len(selected) == 1 else None
 
     def _select_photo(self, photo_id: UUID) -> None:
         for row in range(self.photo_model.rowCount()):
@@ -499,21 +512,34 @@ class MainWindow(QMainWindow):
                     self.photo_table.setCurrentIndex(index)
                 return
 
-    def update_photo_selection(self, current, previous=None) -> None:
-        del previous
+    def update_photo_selection(self, *unused) -> None:
         tracks = self.database.list_tracks()
-        if not current.isValid():
+        photos = [photo for photo_id in self._selected_photo_ids()
+                  if (photo := self.database.get_photo(photo_id)) is not None]
+        if not photos:
             self.photo_editor.clear(tracks)
-            return
-        source = self.photo_proxy.mapToSource(current)
-        photo_id = self.photo_model.item(source.row(), 0).data(PHOTO_ID_ROLE)
-        photo = self.database.get_photo(photo_id)
-        if photo is None:
-            self.photo_editor.clear(tracks)
-            return
-        self.photo_editor.show_photo(photo, tracks)
+        elif len(photos) == 1:
+            self.photo_editor.show_photo(photos[0], tracks)
+        else:
+            self.photo_editor.show_photos(photos, tracks)
         if self.data_tabs.currentIndex() == 3:
             self.right_panel_stack.setCurrentIndex(3)
+
+    def assign_selected_photos_track(self) -> None:
+        selected = self._selected_photo_ids()
+        if len(selected) < 2 or self.photo_editor.track_combo.currentIndex() < 0:
+            return
+        track_id = self.photo_editor.selected_track_uuid
+        track_name = self.photo_editor.track_combo.currentText()
+        try:
+            count = self.database.set_photos_track(selected, track_id)
+        except sqlite3.Error:
+            QMessageBox.critical(self, "Photo assignment", "Photos could not be assigned.")
+            return
+        self.load_photos()
+        message = (f"Set {count} photos as Standalone." if track_id is None
+                   else f"Assigned {count} photos to track '{track_name}'.")
+        self.statusBar().showMessage(message, 5000)
 
     def save_photo(self) -> None:
         photo_id = self._current_photo_id()
@@ -532,6 +558,32 @@ class MainWindow(QMainWindow):
             )
             return
         self.load_photos(photo.id)
+
+    def match_photos_to_tracks(self) -> None:
+        try:
+            photos = self.database.list_photos()
+            tracks = self.database.list_tracks()
+            for track in tracks:
+                track.points = self.database.list_track_points(track.id)
+            results = preview_photo_matches(photos, PhotoTrackMatcher(tracks))
+        except sqlite3.Error:
+            QMessageBox.critical(self, "Photo Track Matching", "Photo and Track data could not be loaded.")
+            return
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Photo Track Matching")
+        dialog.setText(match_summary(results))
+        dialog.setStandardButtons(QMessageBox.StandardButton.Apply | QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if dialog.exec() != QMessageBox.StandardButton.Apply:
+            return
+        try:
+            applied = apply_photo_matches(self.database, results)
+        except sqlite3.Error:
+            self.load_photos()
+            QMessageBox.critical(self, "Photo Track Matching", "Assignments could not all be saved. Review the Photos table.")
+            return
+        self.load_photos()
+        QMessageBox.information(self, "Photo Track Matching", f"Matched {applied} photos to tracks.")
 
     def import_photos_from_imagekit(self) -> None:
         dialog = ImageKitImportDialog(self.database, self)

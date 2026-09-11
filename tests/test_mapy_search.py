@@ -112,6 +112,9 @@ class FakeReply:
         self._content = content
         self.deleted = False
 
+    def attribute(self, attribute):
+        return None
+
     def error(self):
         return self._error
 

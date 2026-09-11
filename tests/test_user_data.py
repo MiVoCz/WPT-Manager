@@ -150,9 +150,7 @@ def test_first_run_uses_default_and_stores_only_bootstrap_path(
     assert result == (selected.resolve(), settings)
     assert stored_user_data_directory(settings) == selected.resolve()
     assert settings.allKeys() == [USER_DATA_DIRECTORY_KEY]
-    assert json.loads((selected / "config.json").read_text()) == {
-        "mapy_api_key": ""
-    }
+    assert json.loads((selected / "config.json").read_text()) == {}
     assert (selected / "icons").is_dir()
     application.processEvents()
 

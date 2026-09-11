@@ -202,11 +202,7 @@ MAP_HTML = """<!DOCTYPE html>
         tileStatus.hidden = tileErrorCount === 0;
       });
       baseTileLayer.on("tileerror", event => {
-        const url = event.tile.currentSrc || event.tile.src || "unknown URL";
-        const error = event.error && event.error.message
-          ? event.error.message
-          : String(event.error || "unknown error");
-        console.error(source.label + " tile failed", url, error);
+        console.error("Map tile failed to load. Check connection and API permissions.");
         tileErrorCount += 1;
         tileStatus.hidden = false;
       });
@@ -545,7 +541,7 @@ class MapBridge(QObject):
     @Slot(str)
     def openExternalUrl(self, url: str) -> None:
         if url not in {MAPY_HOME_URL, MAPY_COPYRIGHT_URL}:
-            LOGGER.warning("Blocked unexpected external map URL: %s", url)
+            LOGGER.warning("Blocked unexpected external map URL.")
             return
         QDesktopServices.openUrl(QUrl(url))
 
@@ -560,8 +556,9 @@ class MapWebPage(QWebEnginePage):
         line_number: int,
         source_id: str,
     ) -> None:
-        formatted_message = f"{source_id}:{line_number}: {message}"
-        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessage:
+        # Browser diagnostics can contain authenticated URLs or echoed secrets.
+        formatted_message = f"Map JavaScript diagnostic at line {line_number}."
+        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
             LOGGER.error("Map JavaScript error: %s", formatted_message)
         self.console_message.emit(formatted_message)
 
@@ -818,30 +815,35 @@ class WaypointMap(MapWebView):
             LOGGER.error(message)
             self._record_console_message(message)
             return
-        self._flush_pending_map_source()
-        self._flush_pending_waypoints()
-        self._flush_pending_selection()
-        self._flush_pending_search_result()
-        self._flush_pending_track()
+        self._sync_pending_map_state()
 
     def _handle_map_ready(self) -> None:
         self._map_ready = True
-        self._flush_pending_map_source()
-        self._invalidate_initial_size_if_ready()
-        self._flush_pending_waypoints()
-        self._flush_pending_selection()
-        self._flush_pending_search_result()
+        self._sync_pending_map_state()
 
     def _handle_first_visible_size(self) -> None:
         self._view_visible = True
+        self._sync_pending_map_state()
+
+    def _sync_pending_map_state(self) -> None:
+        """Push the latest queued state regardless of readiness event order.
+
+        Collection and track payloads already reflect current visibility. Flush
+        their layers before selection; no checkbox event is needed to render.
+        Each flush retains its pending state until its prerequisites are met.
+        """
+        self._flush_pending_map_source()
         self._invalidate_initial_size_if_ready()
         self._flush_pending_waypoints()
+        self._flush_pending_track()
+        self._flush_pending_collections()
         self._flush_pending_selection()
         self._flush_pending_search_result()
 
     def _invalidate_initial_size_if_ready(self) -> None:
         if (
-            self._map_ready
+            self._page_loaded
+            and self._map_ready
             and self._view_visible
             and not self._initial_size_invalidated
         ):

@@ -38,7 +38,6 @@ from PySide6.QtWidgets import (
 )
 
 from wpt_manager.database.database import Database
-from wpt_manager.config import load_application_config
 from wpt_manager.gui.collection_edit_dialog import CollectionEditDialog
 from wpt_manager.gui.collection_create_dialog import CollectionCreateDialog
 from wpt_manager.gui.collection_merge_dialog import CollectionMergeDialog
@@ -98,6 +97,13 @@ class MainWindow(QMainWindow):
     def open_imagekit_settings(self) -> None:
         ImageKitSettingsDialog(self).exec()
 
+    def open_mapy_settings(self) -> None:
+        ImageKitSettingsDialog(
+            self, provider="mapy", legacy_path=self.user_data_directory / "config.json",
+        ).exec()
+        if self.map_window is not None:
+            self.map_window.refresh_credentials()
+
     def __init__(
         self,
         database: Database,
@@ -122,6 +128,9 @@ class MainWindow(QMainWindow):
         self.imagekit_settings_action = QAction("ImageKit...", self)
         settings_menu.addAction(self.imagekit_settings_action)
         self.imagekit_settings_action.triggered.connect(self.open_imagekit_settings)
+        self.mapy_settings_action = QAction("Mapy.com...", self)
+        settings_menu.addAction(self.mapy_settings_action)
+        self.mapy_settings_action.triggered.connect(self.open_mapy_settings)
         self.user_data_folder_action = QAction(
             "User data folder...",
             self,
@@ -145,7 +154,7 @@ class MainWindow(QMainWindow):
         self.merge_collections_button.setEnabled(False)
         self.open_map_button = QPushButton("Open Map")
 
-        collection_panel = QGroupBox("Collections")
+        collection_panel = QGroupBox("Waypoints")
         collection_layout = QVBoxLayout(collection_panel)
         self.collection_visibility_header = VisibilityHeaderCheckBox()
         collection_layout.addWidget(self.collection_visibility_header)
@@ -254,7 +263,7 @@ class MainWindow(QMainWindow):
         photo_layout.addWidget(self.match_photos_button)
 
         self.data_tabs = QTabWidget()
-        self.data_tabs.addTab(collection_panel, "Collections")
+        self.data_tabs.addTab(collection_panel, "Waypoints")
         self.data_tabs.addTab(track_panel, "Tracks")
         self.data_tabs.addTab(adventure_panel, "Adventures")
         self.data_tabs.addTab(photo_panel, "Photos")
@@ -1514,9 +1523,7 @@ class MainWindow(QMainWindow):
         if self.map_window is None:
             self.map_window = MapWindow(
                 self,
-                config=load_application_config(
-                    self.user_data_directory / "config.json"
-                ),
+                legacy_config_path=self.user_data_directory / "config.json",
                 icon_catalog=self.icon_catalog,
             )
             self.map_window.marker_clicked.connect(

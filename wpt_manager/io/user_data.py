@@ -16,7 +16,7 @@ def initialize_user_data_directory(directory: Path) -> None:
     config_path = directory / CONFIG_FILENAME
     if not config_path.exists():
         config_path.write_text(
-            json.dumps({"mapy_api_key": ""}, indent=2) + "\n",
+            json.dumps({}, indent=2) + "\n",
             encoding="utf-8",
         )
     (directory / ICONS_DIRECTORY_NAME).mkdir(exist_ok=True)

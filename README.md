@@ -44,7 +44,7 @@ directly from the map.
 - Open a separate `MapWindow` on demand.
 - Display the map with Leaflet.
 - Choose Mapy.com Outdoor, Basic, or Aerial tiles, or OpenStreetMap.
-- Load the Mapy.com API key from `config.json` in the user data folder.
+- Configure Mapy.com credentials in Settings, using the OS credential store.
 - Display the required Mapy.com or OpenStreetMap attribution.
 - Render waypoint markers using their icon, color, and background.
 - Synchronize waypoint selection between `MainWindow` and `MapWindow`.
@@ -132,18 +132,46 @@ Existing target data is never replaced without confirmation, and the original
 folder is never moved or deleted. The change takes full effect after restarting
 WPT-Manager.
 
-Enter a Mapy.com REST API key in `config.json` inside the selected user data
-folder:
+Configure the Mapy.com REST API key in **Settings ? Mapy.com... ? API key**.
+The shared ImageKit/Mapy.com credential dialog masks input and shows only a fixed
+`Saved credential` placeholder for existing keys. Save without editing preserves
+the credential. **Remove saved key** deletes it immediately; Cancel does not undo
+removal. Windows uses Windows Credential Manager via the existing keyring layer,
+service `WPT-Manager`, identifier `mapy_api_key`. No keys go into QSettings.
 
-```json
-{
-  "mapy_api_key": "your-api-key"
-}
-```
+For development, `MAPY_API_KEY` overrides the stored credential. The complete
+priority is nonblank environment value, OS credential store, legacy config, then
+not configured. Values are trimmed. A failing OS store does not prevent the env
+or legacy fallback from working. Without either fallback, an unavailable store is
+reported safely and OpenStreetMap remains usable.
 
-Never commit or distribute a real API key. Without a Mapy.com key, the
-application can still use
-OpenStreetMap; Mapy.com map layers and search require the key.
+**Test connection** validates newly entered input, otherwise the effective key,
+with one asynchronous geocoding request (`query=Praha`, `limit=1`) through the
+existing Qt search client. It does not save anything. Results distinguish
+Connected, Invalid API key (401/403), Network error and Unexpected API error.
+Geocoding success does not guarantee tile permissions: Mapy.com keys can have
+[service-specific restrictions](https://developer.mapy.com/new-api-key-security-by-service/).
+
+Legacy `config.json` in the selected user data folder (development default:
+`data/config.json`) remains a temporary compatibility fallback. Settings offers
+**Import legacy key** only when neither env nor saved key overrides it. Import
+saves to the OS store first. A config containing only that key is cleared to `{}`;
+a mixed config is left untouched to preserve other values. A visible reminder
+explains that you must manually remove its obsolete `mapy_api_key` field. Until
+removed, that field remains a fallback even after deleting the saved credential.
+A failed credential write leaves the legacy file intact. Missing, malformed or
+unreadable legacy files are treated as unconfigured. New configs and the packaged
+example contain `{}`; never put new keys in config files or commit real keys.
+
+Map tiles and search use the same resolver and user data path, including frozen
+apps. Settings changes refresh an already open map/search window. Selecting
+Mapy.com without a key leaves the current provider active and displays guidance
+to Settings. Removing the active Mapy.com credential falls back to OSM unless an
+env/legacy key remains. Invalid tile credentials show the existing tile failure
+indicator; use Test connection for authentication diagnostics. Authenticated tile
+URLs remain in WebEngine memory and are excluded from application diagnostics;
+generated HTML is not written to disk. No new dependency or PyInstaller change is
+required. A release build and live API/OS-store round trip require manual testing.
 
 ## Icon catalog
 

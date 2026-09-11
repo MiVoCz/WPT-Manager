@@ -52,7 +52,7 @@ def test_track_checkboxes_manage_independent_layers_and_keep_waypoints(tmp_path)
 
     window = MainWindow(database, icon_catalog=[])
     assert [window.data_tabs.tabText(i) for i in range(3)] == [
-        "Collections", "Tracks", "Adventures"
+        "Waypoints", "Tracks", "Adventures"
     ]
     assert window.right_panel_stack.currentWidget() is window.right_splitter
     window.data_tabs.setCurrentIndex(1)

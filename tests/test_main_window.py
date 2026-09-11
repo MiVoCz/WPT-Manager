@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
 
 from wpt_manager.database.database import Database
 from wpt_manager.database.collection_merge import merge_collections
-from wpt_manager.config import ApplicationConfig
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.gui.map_window import MapWindow, format_distance_m
 from wpt_manager.io.exceptions import GpxReaderError
@@ -417,11 +416,11 @@ def test_closed_map_window_can_be_opened_again(tmp_path):
     application.processEvents()
 
 
-def test_map_window_defaults_and_fallback_follow_api_key_configuration():
+def test_map_window_defaults_and_fallback_follow_api_key_configuration(monkeypatch):
     application = QApplication.instance() or QApplication([])
-    without_key = MapWindow(config=ApplicationConfig())
+    without_key = MapWindow()
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     with_key = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key")
     )
 
     assert without_key.map_source_combo.currentData() == "openstreetmap"
@@ -432,6 +431,7 @@ def test_map_window_defaults_and_fallback_follow_api_key_configuration():
     assert "requires a configured API key" in without_key.search_status.text()
     assert with_key.search_button.isEnabled()
 
+    monkeypatch.delenv("MAPY_API_KEY")
     mapy_basic_index = without_key.map_source_combo.findData("mapy-basic")
     without_key.map_source_combo.setCurrentIndex(mapy_basic_index)
 
@@ -445,10 +445,10 @@ def test_map_window_defaults_and_fallback_follow_api_key_configuration():
     application.processEvents()
 
 
-def test_map_window_search_panel_is_regular_child_in_central_splitter():
+def test_map_window_search_panel_is_regular_child_in_central_splitter(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key")
     )
 
     central_widget = window.centralWidget()
@@ -479,10 +479,10 @@ def test_map_window_search_panel_is_regular_child_in_central_splitter():
     application.processEvents()
 
 
-def test_map_window_shows_empty_search_results():
+def test_map_window_shows_empty_search_results(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key")
     )
 
     window._show_search_results([])
@@ -495,11 +495,11 @@ def test_map_window_shows_empty_search_results():
     application.processEvents()
 
 
-def test_map_window_near_search_uses_selected_waypoint_and_radius():
+def test_map_window_near_search_uses_selected_waypoint_and_radius(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
     waypoint = Waypoint(name="Anchor", latitude=50.123, longitude=14.456)
@@ -533,11 +533,11 @@ def test_map_window_near_search_uses_selected_waypoint_and_radius():
     application.processEvents()
 
 
-def test_search_results_are_sorted_by_distance_from_map_center():
+def test_search_results_are_sorted_by_distance_from_map_center(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
     window._set_viewport_bbox(13.0, 49.0, 15.0, 51.0)
@@ -560,11 +560,11 @@ def test_search_results_are_sorted_by_distance_from_map_center():
     application.processEvents()
 
 
-def test_search_results_are_sorted_by_distance_from_selected_waypoint():
+def test_search_results_are_sorted_by_distance_from_selected_waypoint(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
     window.set_search_waypoint(
@@ -601,11 +601,11 @@ def test_search_result_distance_format(distance_m, formatted):
     assert format_distance_m(distance_m) == formatted
 
 
-def test_equidistant_search_results_are_sorted_deterministically_by_name():
+def test_equidistant_search_results_are_sorted_deterministically_by_name(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
     window._set_viewport_bbox(13.0, 49.0, 15.0, 51.0)
@@ -628,11 +628,11 @@ def test_equidistant_search_results_are_sorted_deterministically_by_name():
     application.processEvents()
 
 
-def test_search_type_change_updates_immediately_and_is_used():
+def test_search_type_change_updates_immediately_and_is_used(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
     places_index = window.search_type_combo.findText("Places")
@@ -663,10 +663,10 @@ def test_search_type_change_updates_immediately_and_is_used():
 
 
 def test_open_selected_search_result_uses_external_mapy_url(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
     opened_urls = []
@@ -902,11 +902,11 @@ def test_add_search_result_to_other_collection_keeps_active_collection(
     application.processEvents()
 
 
-def test_map_window_near_search_requires_selected_waypoint():
+def test_map_window_near_search_requires_selected_waypoint(monkeypatch):
+    monkeypatch.setenv("MAPY_API_KEY", "test-mapy-key")
     application = QApplication.instance() or QApplication([])
     search_client = FakeSearchClient()
     window = MapWindow(
-        config=ApplicationConfig(mapy_api_key="configured-key"),
         search_client=search_client,
     )
 

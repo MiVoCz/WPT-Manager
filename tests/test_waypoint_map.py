@@ -381,11 +381,10 @@ def test_map_context_menu_passes_coordinates_and_requests_add(monkeypatch):
 
     assert bridge_coordinates == [(50.123, 14.456, 120, 80)]
 
-    from wpt_manager.config import ApplicationConfig
     from wpt_manager.gui.map_window import MapWindow
 
     monkeypatch.setattr(QMenu, "popup", lambda *args: None)
-    map_window = MapWindow(config=ApplicationConfig())
+    map_window = MapWindow()
     requested_coordinates = []
     map_window.add_waypoint_requested.connect(
         lambda *values: requested_coordinates.append(values)
@@ -415,11 +414,10 @@ def test_marker_context_menu_passes_uuid_selects_and_does_not_request_add(
 
     assert bridge_requests == [(str(waypoint_id), 120, 80)]
 
-    from wpt_manager.config import ApplicationConfig
     from wpt_manager.gui.map_window import MapWindow
 
     monkeypatch.setattr(QMenu, "popup", lambda *args: None)
-    map_window = MapWindow(config=ApplicationConfig())
+    map_window = MapWindow()
     selected = []
     add_requests = []
     action_requests = []
@@ -474,10 +472,9 @@ def test_move_mode_uses_uuid_routes_map_click_and_blocks_add(monkeypatch):
     waypoint_id = uuid4()
     monkeypatch.setattr(QMenu, "popup", lambda *args: None)
 
-    from wpt_manager.config import ApplicationConfig
     from wpt_manager.gui.map_window import MapWindow
 
-    map_window = MapWindow(config=ApplicationConfig())
+    map_window = MapWindow()
     moves = []
     adds = []
     normal_clicks = []
@@ -518,10 +515,9 @@ def test_move_mode_uses_uuid_routes_map_click_and_blocks_add(monkeypatch):
 def test_escape_cancels_move_mode():
     application = QApplication.instance() or QApplication([])
 
-    from wpt_manager.config import ApplicationConfig
     from wpt_manager.gui.map_window import MapWindow
 
-    map_window = MapWindow(config=ApplicationConfig())
+    map_window = MapWindow()
     map_window.start_move_mode(uuid4())
     map_window._cancel_move_shortcut.activated.emit()
 

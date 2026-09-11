@@ -1,5 +1,6 @@
 import base64
 from dataclasses import replace
+from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import QPoint, QSignalBlocker, Signal, Slot, Qt
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from wpt_manager.config import ApplicationConfig, load_application_config
+from wpt_manager import credential_store as credentials
 from wpt_manager.gui.waypoint_map import WaypointMap
 from wpt_manager.map_sources import (
     MAP_SOURCES,
@@ -78,13 +79,14 @@ class MapWindow(QMainWindow):
     def __init__(
         self,
         parent: QWidget | None = None,
-        config: ApplicationConfig | None = None,
+        legacy_config_path: Path | None = None,
         icon_catalog: list[IconInfo] | None = None,
         search_client: MapySearchClient | None = None,
     ) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.config = config or load_application_config()
+        self._legacy_config_path = legacy_config_path
+        self._mapy_api_key = self._resolve_key()
         self.setWindowTitle("WPT-Manager Map")
         self.resize(900, 700)
         self.selected_waypoint_ids: list[UUID] = []
@@ -119,18 +121,18 @@ class MapWindow(QMainWindow):
         central_layout.addWidget(toolbar)
         central_layout.addWidget(content_splitter, 1)
 
-        initial_source_id = default_map_source_id(self.config.mapy_api_key)
+        initial_source_id = default_map_source_id(self._mapy_api_key)
         initial_source, _ = resolve_map_source(
             initial_source_id,
-            self.config.mapy_api_key,
+            self._mapy_api_key,
         )
         self.map_source_combo.setCurrentIndex(
             self.map_source_combo.findData(initial_source_id)
         )
+        self._active_source_id = initial_source_id
         self._update_map_source_status()
         self.search_client = search_client or MapySearchClient(
-            self.config.mapy_api_key,
-            self,
+            parent=self, legacy_path=legacy_config_path,
         )
         search_panel = self._build_search_panel(content_splitter)
         web_profile = QWebEngineProfile(self)
@@ -512,27 +514,53 @@ class MapWindow(QMainWindow):
         )
         self.search_edit.setFocus()
 
+    def _resolve_key(self) -> str | None:
+        self._credential_error = False
+        try:
+            return credentials.get_mapy_api_key(self._legacy_config_path)
+        except credentials.CredentialStoreError:
+            self._credential_error = True
+            return None
+
+    def refresh_credentials(self) -> None:
+        """Apply settings changes to open map/search controls without restarting."""
+        self._mapy_api_key = self._resolve_key()
+        if not self._mapy_api_key and self._active_source_id != OPENSTREETMAP_SOURCE_ID:
+            with QSignalBlocker(self.map_source_combo):
+                self.map_source_combo.setCurrentIndex(self.map_source_combo.findData(OPENSTREETMAP_SOURCE_ID))
+        self._change_map_source()
+        available = self.search_client.is_available
+        self.search_edit.setEnabled(available)
+        self.search_button.setEnabled(available)
+        if available:
+            self.search_status.clear()
+        else:
+            self.search_status.setText("Mapy.com API key is not configured. Configure it in Settings -> Mapy.com.")
+
     @Slot()
     def _change_map_source(self) -> None:
         source_id = self.map_source_combo.currentData()
-        source, fell_back = resolve_map_source(
-            source_id,
-            self.config.mapy_api_key,
-        )
+        self._mapy_api_key = self._resolve_key()
+        source, fell_back = resolve_map_source(source_id, self._mapy_api_key)
         if fell_back:
             with QSignalBlocker(self.map_source_combo):
                 self.map_source_combo.setCurrentIndex(
-                    self.map_source_combo.findData(OPENSTREETMAP_SOURCE_ID)
+                    self.map_source_combo.findData(self._active_source_id)
                 )
+            self._update_map_source_status()
+            return
+        self._active_source_id = source.id
         self.waypoint_map.set_map_source(source)
         self._update_map_source_status()
 
     def _update_map_source_status(self) -> None:
-        if self.config.mapy_api_key:
+        if self._credential_error:
+            self.map_source_status.setText("Credential store unavailable. Configure Mapy.com in Settings -> Mapy.com.")
+        elif self._mapy_api_key:
             self.map_source_status.clear()
         else:
             self.map_source_status.setText(
-                "Mapy.com API key is not configured; using OpenStreetMap."
+                "Mapy.com API key is not configured. Configure it in Settings -> Mapy.com."
             )
 
     @Slot(float, float, int, int)

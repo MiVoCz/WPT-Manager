@@ -161,9 +161,35 @@ a waypoint icon in OsmAnd.
 
 ## Data
 
-Collections and waypoints are stored in `wpt_manager.db` in the selected user
-data folder. The database uses explicit schema versioning and UUIDs as stable
-identifiers for Collections and waypoints.
+Collections, waypoints, Tracks, Adventures, and Photo records are stored in
+`wpt_manager.db` in the selected user data folder. The database uses explicit
+schema versioning and UUIDs as stable identifiers.
+
+### Photos development notes
+
+A Photo is a metadata record referencing a local or remote image. A Standalone
+Photo has no assigned Track (`track_uuid` is null). Photos never store a direct
+Adventure relationship: Adventure names are derived through the assigned Track
+and the existing many-to-many `adventure_tracks` relationship. Deleting a Track
+therefore keeps its Photos and makes them Standalone.
+
+Remote providers implement the `PhotoSource` protocol and return neutral
+`PhotoSourceItem` values. The GUI, database model, and import service do not
+depend on Synology response objects. The initial `SynologyPhotoSource` supports
+password-protected shared links through an isolated HTTP transport and response
+parser; no password, token, or cookie is persisted.
+
+To inspect a specific NAS response without modifying the database, run:
+
+```powershell
+python -m wpt_manager.photos.synology_probe --debug --nas-url "https://nas.example:5001" "https://quickconnect-id.quickconnect.to/mo/sharing/token"
+```
+
+The password is requested with `getpass` and is not printed. A direct NAS share
+URL supplies its API host automatically. A QuickConnect-only web address is not
+used as a DSM API endpoint; its share ID must be paired with an explicit NAS or
+DDNS address. Synology Photos API details can vary by DSM/Photos release, so the
+provider transport and parser remain separate for adaptation to real responses.
 
 ## Known issues
 
@@ -192,8 +218,10 @@ the top-level windows. Waypoint selection and editing are not affected.
 
 ## Project structure
 
-- `wpt_manager/models/` — Collection, waypoint, duplicate, merge, and icon data
-  models.
+- `wpt_manager/models/` — Collection, waypoint, Track, Adventure, Photo,
+  duplicate, merge, and icon data models.
+- `wpt_manager/photos/` — provider-neutral PhotoSource API, source-item import,
+  Synology shared-link provider, and diagnostic probe.
 - `wpt_manager/io/` — GPX import/export and icon catalog loading.
 - `wpt_manager/validation/` — waypoint validation and geographic duplicate
   detection.

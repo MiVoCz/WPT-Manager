@@ -7,9 +7,10 @@ from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.models.track import Track, TrackPoint
 from wpt_manager.models.adventure import Adventure
+from wpt_manager.models.photo import Photo
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class DatabaseSchemaError(RuntimeError):
@@ -58,6 +59,9 @@ class Database:
                 elif version == 5:
                     self._migrate_schema_5_to_6(connection)
                     version = 6
+                elif version == 6:
+                    self._migrate_schema_6_to_7(connection)
+                    version = 7
                 else:
                     raise DatabaseSchemaError(
                         f"Unsupported database schema version: {version}."
@@ -116,7 +120,10 @@ class Database:
                 if "segment_index" not in point_columns:
                     version = 4
                 else:
-                    version = 6 if "adventures" in tables else 5
+                    if "adventures" not in tables:
+                        version = 5
+                    else:
+                        version = 7 if "photos" in tables else 6
         else:
             version = 2 if "created_at" in waypoint_columns else 1
         connection.execute(f"PRAGMA user_version = {version}")
@@ -157,6 +164,35 @@ class Database:
         )
         Database._create_track_tables(connection)
         Database._create_adventure_tables(connection)
+        Database._create_photo_table(connection)
+
+    @staticmethod
+    def _create_photo_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE photos (
+                uuid TEXT PRIMARY KEY,
+                track_uuid TEXT,
+                name TEXT NOT NULL,
+                taken_at TEXT,
+                latitude REAL,
+                longitude REAL,
+                altitude REAL,
+                source_type TEXT NOT NULL,
+                source_url TEXT,
+                thumbnail_url TEXT,
+                external_id TEXT,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (track_uuid) REFERENCES tracks(id)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX photos_source_external_id "
+            "ON photos(source_type, external_id) WHERE external_id IS NOT NULL"
+        )
 
     @staticmethod
     def _create_adventure_tables(connection: sqlite3.Connection) -> None:
@@ -266,6 +302,10 @@ class Database:
     @staticmethod
     def _migrate_schema_5_to_6(connection: sqlite3.Connection) -> None:
         Database._create_adventure_tables(connection)
+
+    @staticmethod
+    def _migrate_schema_6_to_7(connection: sqlite3.Connection) -> None:
+        Database._create_photo_table(connection)
 
     @staticmethod
     def _migrate_schema_1_to_2(
@@ -1045,3 +1085,131 @@ class Database:
                     )
         finally:
             connection.close()
+
+    @staticmethod
+    def _photo_from_row(row: tuple) -> Photo:
+        return Photo(
+            id=UUID(row[0]),
+            track_uuid=UUID(row[1]) if row[1] else None,
+            name=row[2],
+            taken_at=datetime.fromisoformat(row[3]) if row[3] else None,
+            latitude=row[4],
+            longitude=row[5],
+            altitude=row[6],
+            source_type=row[7],
+            source_url=row[8],
+            thumbnail_url=row[9],
+            external_id=row[10],
+            description=row[11],
+            created_at=datetime.fromisoformat(row[12]),
+        )
+
+    @staticmethod
+    def _photo_columns() -> str:
+        return (
+            "uuid, track_uuid, name, taken_at, latitude, longitude, altitude, "
+            "source_type, source_url, thumbnail_url, external_id, description, "
+            "created_at"
+        )
+
+    def save_photo(self, photo: Photo) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "INSERT INTO photos (" + self._photo_columns() + ") "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                self._photo_values(photo),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    @classmethod
+    def _photo_values(cls, photo: Photo) -> tuple:
+        return (
+            str(photo.id),
+            str(photo.track_uuid) if photo.track_uuid else None,
+            photo.name,
+            cls._datetime_text(photo.taken_at),
+            photo.latitude,
+            photo.longitude,
+            photo.altitude,
+            photo.source_type,
+            photo.source_url,
+            photo.thumbnail_url,
+            photo.external_id,
+            photo.description,
+            cls._datetime_text(photo.created_at),
+        )
+
+    def update_photo(self, photo: Photo) -> None:
+        connection = self._connect()
+        try:
+            values = self._photo_values(photo)
+            cursor = connection.execute(
+                "UPDATE photos SET track_uuid = ?, name = ?, taken_at = ?, "
+                "latitude = ?, longitude = ?, altitude = ?, source_type = ?, "
+                "source_url = ?, thumbnail_url = ?, external_id = ?, "
+                "description = ?, created_at = ? WHERE uuid = ?",
+                (*values[1:], values[0]),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Photo does not exist: {photo.id}")
+            connection.commit()
+        finally:
+            connection.close()
+
+    def get_photo(self, photo_uuid: UUID) -> Photo | None:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT " + self._photo_columns() + " FROM photos WHERE uuid = ?",
+                (str(photo_uuid),),
+            ).fetchone()
+        finally:
+            connection.close()
+        return self._photo_from_row(row) if row else None
+
+    def list_photos(self) -> list[Photo]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT " + self._photo_columns() + " FROM photos "
+                "ORDER BY COALESCE(taken_at, created_at) DESC, name COLLATE NOCASE"
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._photo_from_row(row) for row in rows]
+
+    def delete_photo(self, photo_uuid: UUID) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "DELETE FROM photos WHERE uuid = ?", (str(photo_uuid),)
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def list_photos_for_track(self, track_uuid: UUID) -> list[Photo]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT " + self._photo_columns() + " FROM photos "
+                "WHERE track_uuid = ? ORDER BY COALESCE(taken_at, created_at), uuid",
+                (str(track_uuid),),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._photo_from_row(row) for row in rows]
+
+    def list_standalone_photos(self) -> list[Photo]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT " + self._photo_columns() + " FROM photos "
+                "WHERE track_uuid IS NULL ORDER BY COALESCE(taken_at, created_at), uuid"
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._photo_from_row(row) for row in rows]

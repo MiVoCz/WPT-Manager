@@ -56,6 +56,13 @@ from wpt_manager.gui.track_table import (
     TRACK_ID_ROLE, TrackFilterProxyModel, TrackTableModel,
 )
 from wpt_manager.gui.visibility_header import VisibilityHeaderCheckBox
+from wpt_manager.gui.photo_editor import PhotoEditor
+from wpt_manager.gui.photo_table import (
+    PHOTO_ID_ROLE, PhotoFilterProxyModel, PhotoTableModel,
+)
+from wpt_manager.gui.synology_import_dialog import (
+    SynologyCredentialsDialog, SynologyPhotoSelectionDialog,
+)
 from wpt_manager.io.exceptions import GpxReaderError
 from wpt_manager.io.gpx_exporter import export_collection_gpx
 from wpt_manager.io.gpx_track_importer import (
@@ -74,6 +81,13 @@ from wpt_manager.models.collection import Collection
 from wpt_manager.models.waypoint import Waypoint
 from wpt_manager.models.track import Track, TrackPoint
 from wpt_manager.models.adventure import Adventure
+from wpt_manager.photos.import_service import import_source_items
+from wpt_manager.photos.source import (
+    PhotoSourceError, SynologyApiAddressRequiredError,
+    SynologyAuthenticationError,
+    SynologyUnexpectedResponseError,
+)
+from wpt_manager.photos.synology import SynologyPhotoSource
 from wpt_manager.paths import create_application_settings, store_user_data_directory
 from wpt_manager.validation.waypoint_validator import validate_waypoint
 
@@ -206,10 +220,41 @@ class MainWindow(QMainWindow):
         self.open_adventure_map_button = QPushButton("Open Map")
         adventure_layout.addWidget(self.open_adventure_map_button)
 
+        self.photo_table = QTableView()
+        self.photo_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.photo_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.photo_model = PhotoTableModel()
+        self.photo_proxy = PhotoFilterProxyModel()
+        self.photo_proxy.setSourceModel(self.photo_model)
+        self.photo_table.setModel(self.photo_proxy)
+        self.photo_table.setSortingEnabled(True)
+        self.photo_search_edit = QLineEdit()
+        self.photo_search_edit.setPlaceholderText("Search photos")
+        self.photo_track_filter = QComboBox()
+        self.photo_adventure_filter = QComboBox()
+        self.import_synology_button = QPushButton("Import from Synology...")
+        photo_panel = QGroupBox("Photos")
+        photo_layout = QVBoxLayout(photo_panel)
+        photo_filters = QHBoxLayout()
+        photo_filters.addWidget(QLabel("Search:"))
+        photo_filters.addWidget(self.photo_search_edit)
+        photo_filters.addWidget(QLabel("Track:"))
+        photo_filters.addWidget(self.photo_track_filter)
+        photo_filters.addWidget(QLabel("Adventure:"))
+        photo_filters.addWidget(self.photo_adventure_filter)
+        photo_layout.addLayout(photo_filters)
+        photo_layout.addWidget(self.photo_table)
+        photo_layout.addWidget(self.import_synology_button)
+
         self.data_tabs = QTabWidget()
         self.data_tabs.addTab(collection_panel, "Collections")
         self.data_tabs.addTab(track_panel, "Tracks")
         self.data_tabs.addTab(adventure_panel, "Adventures")
+        self.data_tabs.addTab(photo_panel, "Photos")
 
         self.waypoint_list = QListWidget()
         self.waypoint_list.setSelectionMode(
@@ -234,6 +279,7 @@ class MainWindow(QMainWindow):
         self.waypoint_editor = WaypointEditor(self.icon_catalog)
         self.track_editor = TrackEditor()
         self.adventure_editor = AdventureEditor()
+        self.photo_editor = PhotoEditor()
         self.map_window: MapWindow | None = None
         self._map_waypoints: list[Waypoint] = []
         self._selected_waypoint_ids: list[UUID] = []
@@ -269,6 +315,7 @@ class MainWindow(QMainWindow):
         self.right_panel_stack.addWidget(self.right_splitter)
         self.right_panel_stack.addWidget(self.track_editor)
         self.right_panel_stack.addWidget(self.adventure_editor)
+        self.right_panel_stack.addWidget(self.photo_editor)
 
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.addWidget(self.data_tabs)
@@ -373,12 +420,180 @@ class MainWindow(QMainWindow):
             self.set_all_adventures_visible
         )
         self.data_tabs.currentChanged.connect(self.switch_editor)
+        self.photo_table.selectionModel().currentRowChanged.connect(
+            self.update_photo_selection
+        )
+        self.photo_search_edit.textChanged.connect(self.update_photo_filters)
+        self.photo_track_filter.currentIndexChanged.connect(
+            self.update_photo_filters
+        )
+        self.photo_adventure_filter.currentIndexChanged.connect(
+            self.update_photo_filters
+        )
+        self.photo_editor.save_requested.connect(self.save_photo)
+        self.import_synology_button.clicked.connect(
+            self.import_photos_from_synology
+        )
         self.load_collections()
         self.load_tracks()
         self.load_adventures()
+        self.load_photos()
 
     def switch_editor(self, index: int) -> None:
         self.right_panel_stack.setCurrentIndex(index)
+
+    def load_photos(self, selected_id: UUID | None = None) -> None:
+        if selected_id is None:
+            selected_id = self._current_photo_id()
+        tracks = self.database.list_tracks()
+        self.photo_model.set_photos(
+            self.database.list_photos(),
+            {track.id: track for track in tracks},
+            self.database.list_track_adventure_memberships(),
+        )
+        self.photo_table.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+        self.reload_photo_filters(tracks)
+        if selected_id is not None:
+            self._select_photo(selected_id)
+        elif not self.photo_table.currentIndex().isValid():
+            self.photo_editor.clear(tracks)
+
+    def reload_photo_filters(self, tracks: list[Track] | None = None) -> None:
+        tracks = tracks if tracks is not None else self.database.list_tracks()
+        track_value = self.photo_track_filter.currentData()
+        adventure_value = self.photo_adventure_filter.currentData()
+        with QSignalBlocker(self.photo_track_filter):
+            self.photo_track_filter.clear()
+            self.photo_track_filter.addItem("All", None)
+            self.photo_track_filter.addItem("Standalone", "standalone")
+            for track in tracks:
+                self.photo_track_filter.addItem(track.name, str(track.id))
+            self.photo_track_filter.setCurrentIndex(
+                max(self.photo_track_filter.findData(track_value), 0)
+            )
+        with QSignalBlocker(self.photo_adventure_filter):
+            self.photo_adventure_filter.clear()
+            self.photo_adventure_filter.addItem("All", None)
+            self.photo_adventure_filter.addItem("Standalone", "standalone")
+            for adventure in self.database.list_adventures():
+                self.photo_adventure_filter.addItem(
+                    adventure.name, str(adventure.uuid)
+                )
+            self.photo_adventure_filter.setCurrentIndex(
+                max(self.photo_adventure_filter.findData(adventure_value), 0)
+            )
+        self.update_photo_filters()
+
+    def update_photo_filters(self, *unused) -> None:
+        del unused
+        self.photo_proxy.set_filters(
+            search=self.photo_search_edit.text(),
+            track=self.photo_track_filter.currentData(),
+            adventure=self.photo_adventure_filter.currentData(),
+        )
+
+    def _current_photo_id(self) -> UUID | None:
+        index = self.photo_table.currentIndex()
+        if not index.isValid():
+            return None
+        source = self.photo_proxy.mapToSource(index)
+        return self.photo_model.item(source.row(), 0).data(PHOTO_ID_ROLE)
+
+    def _select_photo(self, photo_id: UUID) -> None:
+        for row in range(self.photo_model.rowCount()):
+            if self.photo_model.item(row, 0).data(PHOTO_ID_ROLE) == photo_id:
+                index = self.photo_proxy.mapFromSource(
+                    self.photo_model.index(row, 0)
+                )
+                if index.isValid():
+                    self.photo_table.setCurrentIndex(index)
+                return
+
+    def update_photo_selection(self, current, previous=None) -> None:
+        del previous
+        tracks = self.database.list_tracks()
+        if not current.isValid():
+            self.photo_editor.clear(tracks)
+            return
+        source = self.photo_proxy.mapToSource(current)
+        photo_id = self.photo_model.item(source.row(), 0).data(PHOTO_ID_ROLE)
+        photo = self.database.get_photo(photo_id)
+        if photo is None:
+            self.photo_editor.clear(tracks)
+            return
+        self.photo_editor.show_photo(photo, tracks)
+        if self.data_tabs.currentIndex() == 3:
+            self.right_panel_stack.setCurrentIndex(3)
+
+    def save_photo(self) -> None:
+        photo_id = self._current_photo_id()
+        photo = self.database.get_photo(photo_id) if photo_id else None
+        name = self.photo_editor.name_edit.text().strip()
+        if photo is None or not name:
+            return
+        photo.name = name
+        photo.description = self.photo_editor.description_edit.toPlainText()
+        photo.track_uuid = self.photo_editor.selected_track_uuid
+        try:
+            self.database.update_photo(photo)
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.critical(
+                self, "Save Photo failed", f"The Photo could not be saved:\n{exc}"
+            )
+            return
+        self.load_photos(photo.id)
+
+    def import_photos_from_synology(self) -> None:
+        credentials = SynologyCredentialsDialog(self)
+        if credentials.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            source = SynologyPhotoSource(
+                credentials.url_edit.text().strip(),
+                credentials.password_edit.text(),
+                nas_api_base_url=(
+                    credentials.nas_url_edit.text().strip() or None
+                ),
+            )
+            items = source.list_photos()
+        except PhotoSourceError as exc:
+            if isinstance(exc, SynologyAuthenticationError):
+                summary = "Synology share authentication failed."
+            elif isinstance(exc, SynologyApiAddressRequiredError):
+                summary = (
+                    "QuickConnect share links require the NAS/DDNS address "
+                    "for Synology Photos API access."
+                )
+            elif isinstance(exc, SynologyUnexpectedResponseError):
+                summary = (
+                    "Synology returned an unexpected web page instead of "
+                    "photo data."
+                )
+            else:
+                summary = "Photos could not be loaded from Synology."
+            message = QMessageBox(self)
+            message.setIcon(QMessageBox.Icon.Critical)
+            message.setWindowTitle("Synology Photos")
+            message.setText(summary)
+            message.setDetailedText(str(exc))
+            message.exec()
+            return
+        selection = SynologyPhotoSelectionDialog(items, self)
+        if selection.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            imported = import_source_items(
+                self.database, source, selection.selected_items
+            )
+        except sqlite3.Error as exc:
+            QMessageBox.critical(
+                self, "Synology Photos", f"Photos could not be imported:\n{exc}"
+            )
+            return
+        self.load_photos(imported[0].id if imported else None)
+        QMessageBox.information(
+            self, "Synology Photos", f"Imported Photos: {len(imported)}"
+        )
 
     def load_tracks(self) -> None:
         self.track_model.set_tracks(
@@ -654,6 +869,7 @@ class MainWindow(QMainWindow):
         self.database.update_adventure(adventure)
         self.load_tracks()
         self.load_adventures()
+        self.load_photos()
         for index in range(self.adventure_list.count()):
             candidate = self.adventure_list.item(index)
             if candidate.data(Qt.ItemDataRole.UserRole) == adventure.uuid:
@@ -682,6 +898,7 @@ class MainWindow(QMainWindow):
         self.delete_adventure_button.setEnabled(False)
         self.load_tracks()
         self.refresh_track_visibility_views()
+        self.load_photos()
 
     def add_selected_tracks_to_adventure(self) -> None:
         adventure_item = self.adventure_list.currentItem()
@@ -714,6 +931,7 @@ class MainWindow(QMainWindow):
         self.load_tracks()
         self.load_adventures()
         self.refresh_track_visibility_views()
+        self.load_photos()
 
     def remove_selected_tracks_from_adventure(self) -> None:
         adventure_item = self.adventure_list.currentItem()
@@ -727,6 +945,7 @@ class MainWindow(QMainWindow):
         self.update_adventure_selection(adventure_item)
         self.load_tracks()
         self.refresh_track_visibility_views()
+        self.load_photos()
 
     def add_existing_tracks_to_adventure(self) -> None:
         adventure_item = self.adventure_list.currentItem()
@@ -748,6 +967,7 @@ class MainWindow(QMainWindow):
         self.load_tracks()
         self.update_adventure_selection(adventure_item)
         self.refresh_track_visibility_views()
+        self.load_photos()
 
     def remove_editor_track_from_adventure(self) -> None:
         adventure_item = self.adventure_list.currentItem()
@@ -760,6 +980,7 @@ class MainWindow(QMainWindow):
         self.load_tracks()
         self.update_adventure_selection(adventure_item)
         self.refresh_track_visibility_views()
+        self.load_photos()
 
     def move_adventure_track(self, offset: int) -> None:
         adventure_item = self.adventure_list.currentItem()
@@ -967,6 +1188,7 @@ class MainWindow(QMainWindow):
             self.reload_and_select_adventure(selected_adventure_uuid)
         else:
             self.load_adventures()
+        self.load_photos()
         self._sync_effective_track_visibility()
 
     def save_track(self) -> None:
@@ -989,6 +1211,7 @@ class MainWindow(QMainWindow):
         if track_id in self._effective_visible_track_ids():
             self._show_track_on_map(track_id)
         self.load_tracks()
+        self.load_photos()
         self._select_track(track_id)
 
     def zoom_to_selected_track(self) -> None:

@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import pytest
 
 from wpt_manager.io.gpx_track_reader import load_gpx_tracks
+from wpt_manager.io import gpx_track_reader
+from wpt_manager.io.exceptions import GpxReaderError
 
 
 def _write_gpx(tmp_path, body):
@@ -45,3 +47,36 @@ def test_track_without_time_or_elevation(tmp_path):
     assert track.start_time is None
     assert track.end_time is None
     assert track.points[0].elevation is None
+
+
+@pytest.mark.parametrize("latitude,longitude", [
+    (0, 0), (-90, 0), (90, 0), (0, -180), (0, 180), (50.1234, 14.5678),
+])
+def test_valid_coordinate_boundaries(tmp_path, latitude, longitude):
+    path = _write_gpx(tmp_path, f'<trk><trkseg><trkpt lat="{latitude}" lon="{longitude}"/></trkseg></trk>')
+    point = load_gpx_tracks(path)[0].points[0]
+    assert (point.latitude, point.longitude) == (latitude, longitude)
+
+
+@pytest.mark.parametrize("axis,value", [
+    ("lat", "90.0001"), ("lat", "-90.0001"),
+    ("lon", "180.0001"), ("lon", "-180.0001"),
+    *((axis, value) for axis in ("lat", "lon") for value in ("NaN", "Infinity", "-Infinity")),
+])
+def test_invalid_coordinates_rejected_before_point_or_distance(tmp_path, monkeypatch, axis, value):
+    coordinates = {"lat": "0", "lon": "0", axis: value}
+    path = _write_gpx(tmp_path, '<trk><trkseg><trkpt lat="{lat}" lon="{lon}"/></trkseg></trk>'.format(**coordinates))
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid coordinates reached point construction or distance calculation")
+    monkeypatch.setattr(gpx_track_reader, "TrackPoint", unexpected)
+    monkeypatch.setattr(gpx_track_reader, "_distance_m", unexpected)
+    with pytest.raises(GpxReaderError, match="Latitude" if axis == "lat" else "Longitude"):
+        load_gpx_tracks(path)
+
+
+def test_multiple_tracks_keep_independent_sequences(tmp_path):
+    path = _write_gpx(tmp_path, '<trk><name>A</name><trkseg><trkpt lat="0" lon="0"/></trkseg></trk>'
+                      '<trk><name>B</name><trkseg><trkpt lat="90" lon="180"/></trkseg></trk>')
+    tracks = load_gpx_tracks(path)
+    assert [track.name for track in tracks] == ["A", "B"]
+    assert [track.points[0].sequence for track in tracks] == [0, 0]

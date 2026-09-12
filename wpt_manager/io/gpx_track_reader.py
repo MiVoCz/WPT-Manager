@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from wpt_manager.models.track import Track, TrackPoint
+from wpt_manager.validation.coordinates import validate_coordinates
 
 from .exceptions import GpxReaderError
 from .gpx_reader import GPX_NAMESPACE
@@ -56,6 +57,9 @@ def load_gpx_tracks(path: str | Path) -> list[Track]:
                     longitude = float(element.attrib["lon"])
                 except (KeyError, ValueError) as exc:
                     raise GpxReaderError("Invalid track point coordinates.") from exc
+                errors = validate_coordinates(latitude, longitude)
+                if errors:
+                    raise GpxReaderError("Invalid track point coordinates: " + " ".join(errors))
                 elevation_element = element.find(f"{namespace}ele")
                 time_element = element.find(f"{namespace}time")
                 try:

@@ -51,6 +51,8 @@ class TrackTableModel(QStandardItemModel):
                 ", ".join(item.name for item in adventures) or "-"
             )
             row = [visible, name, date, distance, adventure]
+            for item in row[1:]:
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             adventure_ids = {item.uuid for item in adventures}
             for item in row:
                 item.setData(track.id, TRACK_ID_ROLE)

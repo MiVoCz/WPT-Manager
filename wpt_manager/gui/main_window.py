@@ -50,6 +50,7 @@ from wpt_manager.gui.theme import install_native_title_bar_theming
 from wpt_manager.gui.waypoint_editor import WaypointEditor
 from wpt_manager.gui.track_editor import TrackEditor
 from wpt_manager.gui.adventure_editor import AdventureEditor
+from wpt_manager.gui.adventure_selection_dialog import AdventureSelectionDialog
 from wpt_manager.gui.add_tracks_dialog import AddTracksDialog
 from wpt_manager.gui.track_table import (
     TRACK_ID_ROLE, TrackFilterProxyModel, TrackTableModel,
@@ -931,14 +932,13 @@ class MainWindow(QMainWindow):
         adventures = self.database.list_adventures()
         if not track_ids or not adventures:
             return
-        names = [adventure.name for adventure in adventures]
-        name, accepted = QInputDialog.getItem(
-            self, "Add Tracks to Adventure", "Adventure:", names, 0, False
-        )
-        if not accepted:
+        dialog = AdventureSelectionDialog(adventures, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        adventure = adventures[names.index(name)]
-        self.database.add_tracks_to_adventure(adventure.uuid, track_ids)
+        adventure_id = dialog.selected_destination
+        if not isinstance(adventure_id, UUID):
+            return
+        self.database.add_tracks_to_adventure(adventure_id, track_ids)
         self.load_tracks()
         self.load_adventures()
         self.refresh_track_visibility_views()
@@ -1130,18 +1130,14 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         adventures = self.database.list_adventures()
-        choices = ["Standalone Tracks"] + [
-            f'Adventure: {item.name}' for item in adventures
-        ] + ["New Adventure"]
-        choice, accepted = QInputDialog.getItem(
-            self, "Track Import", "Import destination:", choices, 0, False
-        )
-        if not accepted:
+        dialog = AdventureSelectionDialog(adventures, self, for_import=True)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        choice = dialog.selected_destination
         try:
-            if choice == "Standalone Tracks":
+            if choice == "standalone":
                 tracks = import_gpx_files(self.database, paths)
-            elif choice == "New Adventure":
+            elif choice == "new":
                 name, named = QInputDialog.getText(
                     self, "New Adventure", "Name:"
                 )
@@ -1158,11 +1154,12 @@ class MainWindow(QMainWindow):
                     new_adventure=adventure,
                 )
                 self.load_adventures()
-            else:
-                adventure = adventures[choices.index(choice) - 1]
+            elif isinstance(choice, UUID):
                 tracks = import_gpx_files_to_adventure(
-                    self.database, paths, adventure.uuid
+                    self.database, paths, choice
                 )
+            else:
+                return
         except (GpxReaderError, sqlite3.Error, ValueError) as exc:
             QMessageBox.critical(
                 self, "Import Track failed", f"The Track could not be imported:\n{exc}"

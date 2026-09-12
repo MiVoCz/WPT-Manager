@@ -337,7 +337,9 @@ MAP_HTML = """<!DOCTYPE html>
           [waypoint.latitude, waypoint.longitude],
           {icon: icon}
         );
-        marker.bindTooltip(waypoint.name);
+        const tooltip = document.createElement("span");
+        tooltip.textContent = waypoint.name;
+        marker.bindTooltip(tooltip);
         marker.on("click", () => {
           if (bridge) bridge.markerClicked(waypoint.id);
         });
@@ -385,7 +387,9 @@ MAP_HTML = """<!DOCTYPE html>
           icon: L.divIcon({className: "wpt-marker-icon", html: shell,
             iconSize: [32, 32], iconAnchor: [16, 16]})
         });
-        marker.bindTooltip(waypoint.name);
+        const tooltip = document.createElement("span");
+        tooltip.textContent = waypoint.name;
+        marker.bindTooltip(tooltip);
         marker.on("click", () => bridge && bridge.markerClicked(waypoint.id));
         marker.on("contextmenu", event => {
           if (!bridge) return;
@@ -432,7 +436,9 @@ MAP_HTML = """<!DOCTYPE html>
         [result.latitude, result.longitude],
         {icon: icon, zIndexOffset: 2000}
       );
-      searchMarker.bindTooltip(result.name);
+      const tooltip = document.createElement("span");
+      tooltip.textContent = result.name;
+      searchMarker.bindTooltip(tooltip);
       searchMarker.addTo(searchMarkerLayer);
       map.setView(
         [result.latitude, result.longitude],

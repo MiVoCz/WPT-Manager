@@ -536,6 +536,18 @@ class Database:
             comment=row[8],
         )
 
+    def get_waypoint_collection_id(self, waypoint_id: UUID) -> UUID | None:
+        """Return the owning Collection independently of the current GUI selection."""
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT collection_id FROM waypoints WHERE id = ?",
+                (str(waypoint_id),),
+            ).fetchone()
+        finally:
+            connection.close()
+        return UUID(row[0]) if row is not None else None
+
     def list_waypoints(
         self,
         collection_id: UUID,

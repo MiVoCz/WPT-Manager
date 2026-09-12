@@ -1440,6 +1440,18 @@ class MainWindow(QMainWindow):
         self.update_collection_visibility_header()
         self.refresh_map_visibility()
 
+    def _refresh_map_collections(self, collection_ids: set[UUID]) -> None:
+        """Refresh changed content using visibility state, never editor selection."""
+        if self.map_window is None:
+            return
+        for collection_id in collection_ids:
+            if collection_id in self._visible_collection_ids:
+                self._show_collection_on_map(collection_id)
+                self._shown_collection_ids.add(collection_id)
+            else:
+                self.map_window.hide_collection(collection_id)
+                self._shown_collection_ids.discard(collection_id)
+
     def _show_collection_on_map(self, collection_id: UUID) -> None:
         if self.map_window is not None:
             self.map_window.show_collection(
@@ -1587,8 +1599,7 @@ class MainWindow(QMainWindow):
         item = self.collection_list.currentItem()
         if item is not None:
             collection_id = item.data(Qt.ItemDataRole.UserRole)
-            if collection_id in self._visible_collection_ids:
-                self._show_collection_on_map(collection_id)
+            self._refresh_map_collections({collection_id})
 
     def _update_map_waypoint(self, waypoint: Waypoint) -> None:
         self._map_waypoints = [
@@ -1601,9 +1612,7 @@ class MainWindow(QMainWindow):
             )
             item = self.collection_list.currentItem()
             if item is not None:
-                self._show_collection_on_map(
-                    item.data(Qt.ItemDataRole.UserRole)
-                )
+                self._refresh_map_collections({item.data(Qt.ItemDataRole.UserRole)})
 
     def _sync_map_selection(self) -> None:
         self._selected_waypoint_ids = [
@@ -1631,7 +1640,24 @@ class MainWindow(QMainWindow):
             None,
         )
 
-    def _select_waypoint_from_map(self, waypoint_id: UUID) -> None:
+    def _select_waypoint_from_map(self, waypoint_id: UUID) -> bool:
+        try:
+            collection_id = self.database.get_waypoint_collection_id(waypoint_id)
+            waypoint = self.database.get_waypoint(waypoint_id)
+        except (sqlite3.Error, ValueError):
+            return False
+        if collection_id is None or waypoint is None:
+            return False
+        collection_item = next(
+            (self.collection_list.item(row)
+             for row in range(self.collection_list.count())
+             if self.collection_list.item(row).data(Qt.ItemDataRole.UserRole) == collection_id),
+            None,
+        )
+        if collection_item is None:
+            return False
+        if self.collection_list.currentItem() is not collection_item:
+            self.collection_list.setCurrentItem(collection_item)
         for index in range(self.waypoint_list.count()):
             item = self.waypoint_list.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == waypoint_id:
@@ -1639,20 +1665,18 @@ class MainWindow(QMainWindow):
                     item,
                     QItemSelectionModel.SelectionFlag.ClearAndSelect,
                 )
-                return
+                return True
+        return False
 
     def _map_waypoint_by_id(self, waypoint_id: UUID) -> Waypoint | None:
-        return next(
-            (
-                waypoint
-                for waypoint in self._map_waypoints
-                if waypoint.id == waypoint_id
-            ),
-            None,
-        )
+        try:
+            return self.database.get_waypoint(waypoint_id)
+        except (sqlite3.Error, ValueError):
+            return None
 
     def edit_waypoint_from_map(self, waypoint_id: UUID) -> None:
-        self._select_waypoint_from_map(waypoint_id)
+        if not self._select_waypoint_from_map(waypoint_id):
+            return
         if self.isMinimized():
             self.showNormal()
         else:
@@ -1673,6 +1697,8 @@ class MainWindow(QMainWindow):
             return
 
         if not self._confirm_waypoint_move(waypoint, latitude, longitude):
+            return
+        if not self._select_waypoint_from_map(waypoint_id):
             return
 
         moved_waypoint = replace(
@@ -1732,8 +1758,8 @@ class MainWindow(QMainWindow):
         waypoint = self._map_waypoint_by_id(waypoint_id)
         if waypoint is None or self.map_window is None:
             return
-        self._select_waypoint_from_map(waypoint_id)
-        self.map_window.prepare_search_near_waypoint(waypoint)
+        if self._select_waypoint_from_map(waypoint_id):
+            self.map_window.prepare_search_near_waypoint(waypoint)
 
     def open_waypoint_in_mapy(self, waypoint_id: UUID) -> None:
         waypoint = self._map_waypoint_by_id(waypoint_id)
@@ -1747,7 +1773,8 @@ class MainWindow(QMainWindow):
         waypoint = self._map_waypoint_by_id(waypoint_id)
         if waypoint is None:
             return
-        self._select_waypoint_from_map(waypoint_id)
+        if not self._select_waypoint_from_map(waypoint_id):
+            return
         self._confirm_and_delete_waypoints(
             [waypoint_id],
             f'Delete waypoint "{waypoint.name}"?',
@@ -1841,6 +1868,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._refresh_map_collections({collection_id})
         active_collection_item = self.collection_list.currentItem()
         active_collection_id = (
             active_collection_item.data(Qt.ItemDataRole.UserRole)
@@ -2042,6 +2070,7 @@ class MainWindow(QMainWindow):
             return
 
         self.load_waypoints(source_item, fit_map_viewport=False)
+        self._refresh_map_collections({source_id, target_id})
         target_name = next(
             collection.name
             for collection in targets
@@ -2148,8 +2177,7 @@ class MainWindow(QMainWindow):
             return
 
         self._visible_collection_ids.discard(collection_id)
-        if self.map_window is not None:
-            self.map_window.hide_collection(collection_id)
+        self._refresh_map_collections({collection_id})
 
         self.load_collections()
         if self.collection_list.count() > 0:
@@ -2408,7 +2436,8 @@ class MainWindow(QMainWindow):
             dialog.created_collection_id or dialog.merged_target_id
         )
         if selected_collection_id is not None:
-            self._visible_collection_ids.add(selected_collection_id)
+            if dialog.created_collection_id is not None:
+                self._visible_collection_ids.add(selected_collection_id)
             self.reload_and_select_collection(selected_collection_id)
 
     def export_gpx_file(self) -> None:

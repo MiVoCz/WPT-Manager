@@ -37,7 +37,7 @@ def test_source_item_mapping_with_metadata_and_optional_values():
         "42", "Photo", taken, 50.0, 14.0, None,
         "original", None, {"provider": "value"},
     )
-    photo = create_photo_from_source_item(item, "synology")
+    photo = create_photo_from_source_item(item, "local")
     assert photo.external_id == "42"
     assert photo.taken_at == taken
     assert (photo.latitude, photo.longitude, photo.altitude) == (50.0, 14.0, None)

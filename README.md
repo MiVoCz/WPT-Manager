@@ -204,23 +204,9 @@ therefore keeps its Photos and makes them Standalone.
 Remote providers implement the `PhotoSource` protocol and return neutral
 `PhotoSourceItem` values. The GUI, database model, and import service do not
 depend on provider response objects. ImageKit is the supported external import
-in the Photos GUI. Synology import controls and dialogs have been removed;
-existing Synology Photos remain readable, editable and eligible for previews.
-The retained developer-only `SynologyPhotoSource` supports
-password-protected shared links through an isolated HTTP transport and response
-parser; no password, token, or cookie is persisted.
-
-To inspect a specific NAS response without modifying the database, run:
-
-```powershell
-python -m wpt_manager.photos.synology_probe --debug --nas-url "https://nas.example:5001" "https://quickconnect-id.quickconnect.to/mo/sharing/token"
-```
-
-The password is requested with `getpass` and is not printed. A direct NAS share
-URL supplies its API host automatically. A QuickConnect-only web address is not
-used as a DSM API endpoint; its share ID must be paired with an explicit NAS or
-DDNS address. Synology Photos API details can vary by DSM/Photos release, so the
-provider transport and parser remain separate for adaptation to real responses.
+in the Photos GUI. Legacy Photo records with `source_type='synology'` remain
+readable, editable, assignable to Tracks and deletable, but Synology import is
+no longer supported. Preview uses stored URLs without provider authentication.
 
 ## ImageKit setup (read-only developer integration)
 
@@ -292,7 +278,7 @@ thumbnail, `build_imagekit_preview_url` adds a delivery query transformation
 existing query transformation. ImageKit's
 [max-size transformation](https://imagekit.io/docs/image-resize-and-crop)
 preserves aspect ratio without cropping. No transformed file is stored.
-Local file URLs/absolute paths and legacy Synology URLs are also supported.
+Local file URLs/absolute paths and stored remote URLs are also supported.
 
 Selection changes abort pending requests and ignore stale replies. Each editor
 keeps up to 32 downscaled previews in memory; resizing only rescales the cached
@@ -397,7 +383,7 @@ the top-level windows. Waypoint selection and editing are not affected.
 - `wpt_manager/models/` — Collection, waypoint, Track, Adventure, Photo,
   duplicate, merge, and icon data models.
 - `wpt_manager/photos/` — provider-neutral PhotoSource API, source-item import,
-  Synology shared-link and ImageKit read-only providers, and diagnostic probes.
+  the ImageKit read-only provider, and its diagnostic probe.
 - `wpt_manager/io/` — GPX import/export and icon catalog loading.
 - `wpt_manager/validation/` — waypoint validation and geographic duplicate
   detection.

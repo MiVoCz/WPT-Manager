@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -13,6 +14,7 @@ from wpt_manager.database.database import Database
 from wpt_manager.gui.main_window import MainWindow
 from wpt_manager.gui.photo_preview import PhotoPreview, photo_preview_url
 from wpt_manager.models.photo import Photo
+from wpt_manager.models.track import Track
 from wpt_manager.photos.imagekit import build_imagekit_preview_url
 
 
@@ -114,18 +116,50 @@ def test_memory_cache_bounded(preview):
     assert "https://host/0" not in preview._cache
 
 
-def test_synology_record_readable_without_import_ui(preview, tmp_path):
+def test_synology_record_remains_generic_photo(preview, tmp_path, mock_preview_downloads):
     database = Database(tmp_path / "photos.db")
     database.initialize()
-    photo = Photo("Legacy", "synology", source_url="https://host/legacy")
+    track = Track("Trip", "trip.gpx")
+    database.save_track(track)
+    photo = Photo(
+        "Legacy", "synology", source_url="https://host/legacy",
+        thumbnail_url="https://host/legacy-thumb",
+    )
     database.save_photo(photo)
     window = MainWindow(database, icon_catalog=[])
-    assert not hasattr(window, "import_synology_button")
-    assert not hasattr(window, "import_photos_from_synology")
-    assert hasattr(window, "import_imagekit_button")
-    saved = database.get_photo(photo.id)
-    window.photo_editor.show_photo(saved, [])
-    assert window.photo_editor.source_type_edit.text() == "synology"
-    assert window.photo_editor.preview_label.text() == "Loading..."
-    window.photo_editor.clear([])
-    window.close()
+    try:
+        assert database.get_photo(photo.id) == photo
+        window.data_tabs.setCurrentIndex(3)
+        window._select_photo(photo.id)
+        editor = window.photo_editor
+        assert editor.name_edit.text() == photo.name
+        assert editor.source_type_edit.text() == "synology"
+        request = mock_preview_downloads.call_args.args[0]
+        assert request.url().toString() == photo.thumbnail_url
+        finish(editor.preview_label, editor.preview_label._reply,
+               editor.preview_label._generation, photo.thumbnail_url)
+        assert not editor.preview_label.pixmap().isNull()
+        assert photo_preview_url(replace(photo, thumbnail_url=None)) == photo.source_url
+
+        editor.name_edit.setText("Renamed legacy photo")
+        editor.description_edit.setPlainText("Updated description")
+        editor.track_combo.setCurrentIndex(editor.track_combo.findData(str(track.id)))
+        window.save_photo()
+        expected = replace(photo, name="Renamed legacy photo",
+                           description="Updated description", track_uuid=track.id)
+        assert database.get_photo(photo.id) == expected
+
+        # Expired stored URLs fail through the generic preview path without authentication.
+        preview.show_photo(expected)
+        reply = preview._reply
+        reply.error.return_value = QNetworkReply.NetworkError.ContentNotFoundError
+        preview._finished(reply, preview._generation, expected.thumbnail_url)
+        assert preview.text() == "Failed to load preview"
+
+        database.delete_photo(photo.id)
+        window.load_photos()
+        assert database.get_photo(photo.id) is None
+        assert window.photo_proxy.rowCount() == 0
+    finally:
+        window.photo_editor.clear([])
+        window.close()

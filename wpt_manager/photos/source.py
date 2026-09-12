@@ -7,43 +7,7 @@ class PhotoSourceError(RuntimeError):
     """Base error raised by a remote photo source."""
 
 
-class InvalidShareUrlError(PhotoSourceError):
-    pass
-
-
 class PhotoAuthenticationError(PhotoSourceError):
-    pass
-
-
-class PhotoConnectionTimeoutError(PhotoSourceError):
-    pass
-
-
-class MalformedPhotoResponseError(PhotoSourceError):
-    pass
-
-
-class UnsupportedPhotoResponseError(PhotoSourceError):
-    pass
-
-
-class SynologyAuthenticationError(PhotoAuthenticationError):
-    pass
-
-
-class SynologyConnectionError(PhotoSourceError):
-    pass
-
-
-class SynologyUnexpectedResponseError(UnsupportedPhotoResponseError):
-    pass
-
-
-class SynologyApiAddressRequiredError(SynologyUnexpectedResponseError):
-    pass
-
-
-class SynologyMalformedResponseError(MalformedPhotoResponseError):
     pass
 
 

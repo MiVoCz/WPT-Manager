@@ -23,7 +23,7 @@ def _setup(tmp_path):
     database.save_adventure(adventure)
     database.add_track_to_adventure(adventure.uuid, member.id)
     photos = [
-        Photo("Lake Sunrise", "synology", track_uuid=member.id),
+        Photo("Lake Sunrise", "imagekit", track_uuid=member.id),
         Photo("Forest", "local", track_uuid=ungrouped.id),
         Photo("Standalone Lake", "local"),
     ]

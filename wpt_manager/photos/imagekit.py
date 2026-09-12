@@ -108,7 +108,7 @@ def _datetime(value: Any, offset: Any = None) -> datetime | None:
             if int(hours) < 24 and int(minutes) < 60:
                 delta = timedelta(hours=int(hours), minutes=int(minutes))
                 result = result.replace(tzinfo=timezone(delta if sign == "+" else -delta))
-    # Like Synology and Photo persistence, retain the supplied UTC offset.
+    # Retain the supplied UTC offset for Photo persistence.
     return result
 
 

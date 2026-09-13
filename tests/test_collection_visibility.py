@@ -22,9 +22,6 @@ class FakeLayerMap:
     def hide_collection(self, collection_id):
         self.collections.pop(collection_id, None)
 
-    def set_waypoints(self, waypoints, fit_viewport=True):
-        pass
-
 
 def test_collection_selection_and_checkbox_visibility_are_independent(tmp_path):
     application = QApplication.instance() or QApplication([])

@@ -470,13 +470,6 @@ class MapWindow(QMainWindow):
         if result is not None:
             self.add_search_result_requested.emit(result)
 
-    def set_waypoints(
-        self,
-        waypoints: list[Waypoint],
-        fit_viewport: bool = True,
-    ) -> None:
-        self.waypoint_map.set_active_waypoints(waypoints, fit_viewport)
-
     def show_collection(
         self, collection_id: UUID, waypoints: list[Waypoint]
     ) -> None:

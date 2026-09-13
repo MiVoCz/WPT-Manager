@@ -55,6 +55,17 @@ class FakeSearchClient(QObject):
         self.calls.append((query, options))
 
 
+def active_collection_payload(window):
+    """Inspect the current Collection layer, without a parallel active dataset."""
+    item = window.collection_list.currentItem()
+    if item is None:
+        return []
+    collection_id = str(item.data(Qt.ItemDataRole.UserRole))
+    return window.map_window.waypoint_map._collection_payloads.get(
+        collection_id, {"waypoints": []}
+    )["waypoints"]
+
+
 def test_main_window_defaults(tmp_path):
     application = QApplication.instance() or QApplication([])
     database = Database(tmp_path / "wpt_manager.db")
@@ -153,7 +164,7 @@ def test_new_collection_creates_first_selects_and_clears_open_map(
         Qt.ItemDataRole.UserRole
     ) == collections[0].id
     assert window.waypoint_list.count() == 0
-    assert window.map_window.waypoint_map._waypoint_payload == []
+    assert active_collection_payload(window) == []
 
     window.map_window.close()
     window.close()
@@ -330,7 +341,7 @@ def test_move_selected_waypoints_updates_source_and_open_map(
         Qt.ItemDataRole.UserRole
     ) == source.id
     assert window.waypoint_list.count() == 1
-    assert window.map_window.waypoint_map._waypoint_payload == [
+    assert active_collection_payload(window) == [
         {
             "id": str(remaining.id),
             "name": remaining.name,
@@ -342,7 +353,6 @@ def test_move_selected_waypoints_updates_source_and_open_map(
             "iconSvgUrl": None,
         }
     ]
-    assert not window.map_window.waypoint_map._pending_fit_viewport
     assert messages == ["2 waypoint(s) moved to Target"]
 
     window.map_window.close()
@@ -766,15 +776,15 @@ def test_add_search_result_saves_selects_and_updates_active_collection(
     window.map_window.search_results.setCurrentRow(0)
     map_window = window.map_window
     sync_calls = []
-    original_set_waypoints = map_window.set_waypoints
+    original_show_collection = map_window.show_collection
     original_set_selected = map_window.set_selected_waypoint_ids
     original_clear_search_marker = map_window.clear_search_result_marker
     monkeypatch.setattr(
         map_window,
-        "set_waypoints",
-        lambda waypoints, fit_viewport=True: (
+        "show_collection",
+        lambda collection_id, waypoints: (
             sync_calls.append(("dataset", [item.id for item in waypoints])),
-            original_set_waypoints(waypoints, fit_viewport),
+            original_show_collection(collection_id, waypoints),
         )[-1],
     )
     monkeypatch.setattr(
@@ -876,7 +886,7 @@ def test_add_search_result_to_other_collection_keeps_active_collection(
             break
     window.open_map()
     assert window.map_window is not None
-    map_payload_before = list(window.map_window.waypoint_map._waypoint_payload)
+    map_payload_before = list(active_collection_payload(window))
     window.map_window._show_search_results([result])
     window.map_window.search_results.setCurrentRow(0)
     search_marker_before = dict(
@@ -891,7 +901,7 @@ def test_add_search_result_to_other_collection_keeps_active_collection(
         Qt.ItemDataRole.UserRole
     ) == active.id
     assert window._map_waypoints == [existing]
-    assert window.map_window.waypoint_map._waypoint_payload == map_payload_before
+    assert active_collection_payload(window) == map_payload_before
     assert window.map_window.waypoint_map._search_result_payload == (
         search_marker_before
     )
@@ -937,7 +947,7 @@ def test_main_window_updates_open_map_dataset_and_selection(tmp_path):
 
     window.collection_list.setCurrentRow(0)
 
-    assert map_window.waypoint_map._waypoint_payload == [
+    assert active_collection_payload(window) == [
         {
             "id": str(waypoint.id),
             "name": "Place",
@@ -1143,13 +1153,13 @@ def test_move_waypoint_cancel_then_confirm_preserves_identity_and_data(
     assert database.get_waypoint(waypoint.id) == waypoint
 
     datasets = []
-    original_set_waypoints = window.map_window.set_waypoints
+    original_show_collection = window.map_window.show_collection
     monkeypatch.setattr(
         window.map_window,
-        "set_waypoints",
-        lambda waypoints, fit_viewport=True: (
-            datasets.append((list(waypoints), fit_viewport)),
-            original_set_waypoints(waypoints, fit_viewport),
+        "show_collection",
+        lambda collection_id, waypoints: (
+            datasets.append(list(waypoints)),
+            original_show_collection(collection_id, waypoints),
         ),
     )
     monkeypatch.setattr(window, "_confirm_waypoint_move", lambda *args: True)
@@ -1168,8 +1178,7 @@ def test_move_waypoint_cancel_then_confirm_preserves_identity_and_data(
         comment=waypoint.comment,
     )
     assert datasets
-    assert datasets[-1][1] is False
-    assert datasets[-1][0] == [moved]
+    assert datasets[-1] == [moved]
     assert window.map_window.selected_waypoint_ids == [waypoint.id]
 
     window.map_window.close()
@@ -1210,7 +1219,7 @@ def test_delete_waypoint_from_marker_cancel_and_confirm(
     window.delete_waypoint_from_map(waypoint.id)
 
     assert database.get_waypoint(waypoint.id) == waypoint
-    assert map_window.waypoint_map._waypoint_payload[0]["id"] == str(
+    assert active_collection_payload(window)[0]["id"] == str(
         waypoint.id
     )
 
@@ -1218,8 +1227,7 @@ def test_delete_waypoint_from_marker_cancel_and_confirm(
 
     assert database.get_waypoint(waypoint.id) is None
     assert window.waypoint_list.count() == 0
-    assert map_window.waypoint_map._waypoint_payload == []
-    assert not map_window.waypoint_map._pending_fit_viewport
+    assert active_collection_payload(window) == []
     assert window.map_window is map_window
     assert prompts == [
         'Delete waypoint "Delete me"?',
@@ -1321,13 +1329,12 @@ def test_add_waypoint_from_map_saves_selects_sorts_and_updates_map(
     assert window.map_window is not None
     assert {
         payload["id"]
-        for payload in window.map_window.waypoint_map._waypoint_payload
+        for payload in active_collection_payload(window)
     } == {str(created.id), str(existing.id)}
     assert window.map_window.selected_waypoint_ids == [created.id]
     assert window.map_window.waypoint_map._selected_waypoint_ids == [
         str(created.id)
     ]
-    assert not window.map_window.waypoint_map._pending_fit_viewport
 
     window.map_window.close()
     window.close()
@@ -1515,7 +1522,7 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     assert window._map_waypoints == [first_waypoint]
     window.open_map()
     assert window.map_window is not None
-    assert window.map_window.waypoint_map._waypoint_payload == [
+    assert active_collection_payload(window) == [
         {
             "id": str(first_waypoint.id),
             "name": "Pont du Gard",
@@ -1534,7 +1541,7 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
     assert window.waypoint_list.item(0).data(
         Qt.ItemDataRole.UserRole
     ) == second_waypoint.id
-    assert window.map_window.waypoint_map._waypoint_payload == [
+    assert active_collection_payload(window) == [
         {
             "id": str(second_waypoint.id),
             "name": "Koloseum",
@@ -1549,11 +1556,11 @@ def test_selecting_collection_loads_its_waypoints(tmp_path):
 
     window.collection_list.setCurrentRow(2)
     assert window.waypoint_list.count() == 0
-    assert window.map_window.waypoint_map._waypoint_payload == []
+    assert active_collection_payload(window) == []
 
     window.collection_list.setCurrentRow(-1)
     assert window.waypoint_list.count() == 0
-    assert window.map_window.waypoint_map._waypoint_payload == []
+    assert active_collection_payload(window) == []
     assert not window.export_button.isEnabled()
 
     window.close()
@@ -2244,14 +2251,13 @@ def test_save_button_updates_selected_waypoint(tmp_path, monkeypatch):
     assert window.name_edit.text() == "Pont du Gard"
     assert window.color_preview.autoFillBackground()
     assert window.map_window is not None
-    marker_payload = window.map_window.waypoint_map._waypoint_payload[0]
+    marker_payload = active_collection_payload(window)[0]
     assert marker_payload["icon"] == "historic_archaeological_site"
     assert marker_payload["color"] == "#FF8000"
     assert marker_payload["background"] == "square"
     assert marker_payload["iconSvgUrl"].startswith(
         "data:image/svg+xml;base64,"
     )
-    assert not window.map_window.waypoint_map._pending_fit_viewport
     assert messages == ['Waypoint "Pont du Gard" was saved.']
 
     window.map_window.close()

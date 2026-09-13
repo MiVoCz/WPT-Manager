@@ -168,6 +168,12 @@ class Database:
 
     @staticmethod
     def _create_photo_table(connection: sqlite3.Connection) -> None:
+        """Create current Photos schema; historical migrations must not call this."""
+        Database._create_photo_table_v7(connection)
+
+    @staticmethod
+    def _create_photo_table_v7(connection: sqlite3.Connection) -> None:
+        """Frozen schema v7 definition, including its original index and FK."""
         connection.execute(
             """
             CREATE TABLE photos (
@@ -305,7 +311,7 @@ class Database:
 
     @staticmethod
     def _migrate_schema_6_to_7(connection: sqlite3.Connection) -> None:
-        Database._create_photo_table(connection)
+        Database._create_photo_table_v7(connection)
 
     @staticmethod
     def _migrate_schema_1_to_2(

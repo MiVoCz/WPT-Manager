@@ -1488,8 +1488,6 @@ class MainWindow(QMainWindow):
         self,
         current_item: QListWidgetItem | None,
         previous_item: QListWidgetItem | None = None,
-        *,
-        fit_map_viewport: bool = True,
     ) -> bool:
         del previous_item
         self.waypoint_list.clear()
@@ -1521,10 +1519,7 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(waypoint.name)
             item.setData(Qt.ItemDataRole.UserRole, waypoint.id)
             self.waypoint_list.addItem(item)
-        self._set_map_waypoints(
-            waypoints,
-            fit_viewport=fit_map_viewport,
-        )
+        self._set_map_waypoints(waypoints)
         self.waypoint_list.viewport().update()
         return True
 
@@ -1560,7 +1555,6 @@ class MainWindow(QMainWindow):
                 self.delete_waypoint_from_map
             )
             self.map_window.destroyed.connect(self._map_window_destroyed)
-        self.map_window.set_waypoints(self._map_waypoints)
         for collection_id in self._visible_collection_ids:
             self._show_collection_on_map(collection_id)
         self._shown_collection_ids = set(self._visible_collection_ids)
@@ -1583,16 +1577,9 @@ class MainWindow(QMainWindow):
         self._shown_track_ids.clear()
         self._shown_collection_ids.clear()
 
-    def _set_map_waypoints(
-        self,
-        waypoints: list[Waypoint],
-        fit_viewport: bool = True,
-    ) -> None:
+    def _set_map_waypoints(self, waypoints: list[Waypoint]) -> None:
+        """Cache active UI waypoints; refresh layers according to visibility."""
         self._map_waypoints = list(waypoints)
-        if self.map_window is not None:
-            self.map_window.set_waypoints(
-                self._map_waypoints, fit_viewport=fit_viewport
-            )
         item = self.collection_list.currentItem()
         if item is not None:
             collection_id = item.data(Qt.ItemDataRole.UserRole)
@@ -1604,9 +1591,6 @@ class MainWindow(QMainWindow):
             for item in self._map_waypoints
         ]
         if self.map_window is not None:
-            self.map_window.set_waypoints(
-                self._map_waypoints, fit_viewport=False
-            )
             item = self.collection_list.currentItem()
             if item is not None:
                 self._refresh_map_collections({item.data(Qt.ItemDataRole.UserRole)})
@@ -1775,7 +1759,6 @@ class MainWindow(QMainWindow):
         self._confirm_and_delete_waypoints(
             [waypoint_id],
             f'Delete waypoint "{waypoint.name}"?',
-            fit_map_viewport=False,
         )
 
     def add_waypoint_from_map(
@@ -1904,10 +1887,7 @@ class MainWindow(QMainWindow):
         waypoint_id: UUID,
         collection_item: QListWidgetItem,
     ) -> bool:
-        if not self.load_waypoints(
-            collection_item,
-            fit_map_viewport=False,
-        ):
+        if not self.load_waypoints(collection_item):
             return False
         for index in range(self.waypoint_list.count()):
             item = self.waypoint_list.item(index)
@@ -2066,7 +2046,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.load_waypoints(source_item, fit_map_viewport=False)
+        self.load_waypoints(source_item)
         self._refresh_map_collections({source_id, target_id})
         target_name = next(
             collection.name
@@ -2097,8 +2077,6 @@ class MainWindow(QMainWindow):
         self,
         waypoint_ids: list[UUID],
         confirmation_text: str,
-        *,
-        fit_map_viewport: bool = True,
     ) -> None:
         answer = QMessageBox.question(
             self,
@@ -2123,10 +2101,7 @@ class MainWindow(QMainWindow):
 
         collection_item = self.collection_list.currentItem()
         if collection_item is not None:
-            self.load_waypoints(
-                collection_item,
-                fit_map_viewport=fit_map_viewport,
-            )
+            self.load_waypoints(collection_item)
         else:
             self.waypoint_list.clear()
         self.clear_waypoint_editor()

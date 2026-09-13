@@ -13,6 +13,7 @@ from wpt_manager.gui.map_window import build_icon_data_urls
 from wpt_manager.map_sources import (
     MAPY_COPYRIGHT_URL,
     MAPY_HOME_URL,
+    OPENSTREETMAP_SOURCE_ID,
     resolve_map_source,
 )
 from wpt_manager.models.waypoint import Waypoint
@@ -23,13 +24,14 @@ from wpt_manager.models.track import Track, TrackPoint
 def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     first = Waypoint(name="First", latitude=50.0, longitude=14.0)
     second = Waypoint(name="Second", latitude=51.0, longitude=15.0)
 
-    waypoint_map.set_waypoints([first])
-    waypoint_map.set_waypoints([second])
+    waypoint_map.upsert_collection(collection_id, [first])
+    waypoint_map.upsert_collection(collection_id, [second])
 
-    assert waypoint_map._waypoint_payload == [
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"] == [
         {
             "id": str(second.id),
             "name": "Second",
@@ -42,10 +44,10 @@ def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
         }
     ]
     assert (
-        "window.setWaypoints = function(waypoints, fitViewport = true)"
+        "window.upsertCollection = function(collection)"
         in MAP_HTML
     )
-    assert "markerLayer.clearLayers()" in MAP_HTML
+    assert "markerLayer.clearLayers()" not in MAP_HTML
     assert "bridge.markerClicked(waypoint.id)" in MAP_HTML
     assert "bridge.markerContextMenu(" in MAP_HTML
     assert "L.DomEvent.stopPropagation(event.originalEvent)" in MAP_HTML
@@ -54,7 +56,6 @@ def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
     assert "Map library failed to load" in MAP_HTML
     assert "window.setMapSource = function(source)" in MAP_HTML
     assert "map.removeLayer(baseTileLayer)" in MAP_HTML
-    assert "markerLayer.clearLayers()" in MAP_HTML
     assert "const DEFAULT_ZOOM = 7" in MAP_HTML
     assert "baseTileLayer.on(\"tileerror\"" in MAP_HTML
     assert 'target.closest("a[data-external-url]")' in MAP_HTML
@@ -83,30 +84,31 @@ def test_map_payload_uses_uuid_and_replaces_previous_waypoints():
 def test_waypoints_wait_for_page_map_and_visible_view(monkeypatch):
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     scripts = []
     monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
     waypoint = Waypoint(name="Prepared", latitude=50.0, longitude=14.0)
 
-    waypoint_map.set_waypoints([waypoint])
+    waypoint_map.upsert_collection(collection_id, [waypoint])
     assert scripts == []
-    assert waypoint_map._pending_update
+    assert waypoint_map._pending_collections
 
     waypoint_map._handle_load_finished(True)
     assert scripts == []
-    assert waypoint_map._pending_update
+    assert waypoint_map._pending_collections
 
     waypoint_map._handle_map_ready()
     assert len(scripts) == 1
     assert scripts[0].startswith("window.setMapSource(")
-    assert waypoint_map._pending_update
+    assert waypoint_map._pending_collections
 
     waypoint_map._handle_first_visible_size()
     assert scripts[1] == "window.invalidateMapSize();"
     assert len(scripts) == 4
-    assert scripts[2].startswith("window.setWaypoints(")
+    assert scripts[2].startswith("window.upsertCollection(")
     assert str(waypoint.id) in scripts[2]
     assert scripts[3] == "window.setSelectedWaypointIds([]);"
-    assert not waypoint_map._pending_update
+    assert not waypoint_map._pending_collections
 
     waypoint_map.close()
     application.processEvents()
@@ -115,10 +117,11 @@ def test_waypoints_wait_for_page_map_and_visible_view(monkeypatch):
 def test_empty_map_has_no_waypoint_payload():
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
 
-    waypoint_map.set_waypoints([])
+    waypoint_map.upsert_collection(collection_id, [])
 
-    assert waypoint_map._waypoint_payload == []
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"] == []
 
     waypoint_map.close()
     application.processEvents()
@@ -159,15 +162,16 @@ def test_custom_page_is_released_before_custom_profile():
 def test_changing_map_source_does_not_change_waypoint_dataset():
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     waypoint = Waypoint(name="Kept", latitude=50.0, longitude=14.0)
-    waypoint_map.set_waypoints([waypoint])
-    original_payload = list(waypoint_map._waypoint_payload)
+    waypoint_map.upsert_collection(collection_id, [waypoint])
+    original_payload = list(waypoint_map._collection_payloads[str(collection_id)]["waypoints"])
     source, _ = resolve_map_source("mapy-basic", "test-key")
 
     waypoint_map.set_map_source(source)
 
-    assert waypoint_map._waypoint_payload == original_payload
-    assert waypoint_map._pending_update
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"] == original_payload
+    assert waypoint_map._pending_collections
     assert waypoint_map._map_source_payload["id"] == "mapy-basic"
 
     waypoint_map.close()
@@ -177,13 +181,14 @@ def test_changing_map_source_does_not_change_waypoint_dataset():
 def test_multiple_track_layers_are_independent_and_keep_other_payloads(monkeypatch):
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     scripts = []
     monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
     waypoint_map._page_loaded = True
     waypoint_map._map_ready = True
     waypoint_map._view_visible = True
     waypoint = Waypoint("Place", 50, 14)
-    waypoint_map.set_waypoints([waypoint], fit_viewport=False)
+    waypoint_map.upsert_collection(collection_id, [waypoint])
     waypoint_map.set_search_result("Result", 49, 13)
     first = Track("First", "a.gpx", color="#112233")
     second = Track("Second", "b.gpx", color="#445566")
@@ -196,12 +201,12 @@ def test_multiple_track_layers_are_independent_and_keep_other_payloads(monkeypat
 
     assert set(waypoint_map._track_payloads) == {str(first.id), str(second.id)}
     assert '"color": "#112233"' in scripts[-2]
-    waypoint_payload = list(waypoint_map._waypoint_payload)
+    waypoint_payload = list(waypoint_map._collection_payloads[str(collection_id)]["waypoints"])
     search_payload = dict(waypoint_map._search_result_payload)
     waypoint_map.remove_track(first.id)
     assert set(waypoint_map._track_payloads) == {str(second.id)}
     assert scripts[-1] == f'window.removeTrack("{first.id}");'
-    assert waypoint_map._waypoint_payload == waypoint_payload
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"] == waypoint_payload
     assert waypoint_map._search_result_payload == search_payload
 
     waypoint_map.zoom_to_track(second.id)
@@ -235,9 +240,10 @@ def test_map_provider_change_keeps_collection_track_and_search_datasets():
 def test_search_result_replaces_marker_without_changing_waypoints(monkeypatch):
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     waypoint = Waypoint(name="Kept", latitude=50.0, longitude=14.0)
-    waypoint_map.set_waypoints([waypoint])
-    original_payload = list(waypoint_map._waypoint_payload)
+    waypoint_map.upsert_collection(collection_id, [waypoint])
+    original_payload = list(waypoint_map._collection_payloads[str(collection_id)]["waypoints"])
     scripts = []
     monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
     waypoint_map._handle_load_finished(True)
@@ -258,7 +264,7 @@ def test_search_result_replaces_marker_without_changing_waypoints(monkeypatch):
         "latitude": 50.2,
         "longitude": 14.2,
     }
-    assert waypoint_map._waypoint_payload == original_payload
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"] == original_payload
     assert "searchMarkerLayer.clearLayers()" in MAP_HTML
     assert "Math.max(map.getZoom(), 15)" in MAP_HTML
 
@@ -289,6 +295,7 @@ def test_known_svg_icon_and_unknown_icon_fallback(tmp_path):
     icon_urls = build_icon_data_urls(
         [IconInfo(group="Test", icon_name="known", svg_path=svg_path)]
     )
+    collection_id = uuid4()
     waypoint_map = WaypointMap(icon_data_urls=icon_urls)
     known = Waypoint(
         name="Known",
@@ -307,14 +314,14 @@ def test_known_svg_icon_and_unknown_icon_fallback(tmp_path):
         background="square",
     )
 
-    waypoint_map.set_waypoints([known, unknown])
+    waypoint_map.upsert_collection(collection_id, [known, unknown])
 
-    assert waypoint_map._waypoint_payload[0]["iconSvgUrl"].startswith(
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"][0]["iconSvgUrl"].startswith(
         "data:image/svg+xml;base64,"
     )
-    assert waypoint_map._waypoint_payload[0]["background"] == "octagon"
-    assert waypoint_map._waypoint_payload[1]["iconSvgUrl"] is None
-    assert waypoint_map._waypoint_payload[1]["background"] == "square"
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"][0]["background"] == "octagon"
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"][1]["iconSvgUrl"] is None
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"][1]["background"] == "square"
 
     waypoint_map.close()
     application.processEvents()
@@ -323,6 +330,7 @@ def test_known_svg_icon_and_unknown_icon_fallback(tmp_path):
 def test_single_multi_and_cleared_marker_selection(monkeypatch):
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     scripts = []
     monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
     waypoint_map._handle_load_finished(True)
@@ -351,19 +359,21 @@ def test_single_multi_and_cleared_marker_selection(monkeypatch):
 def test_clear_search_result_removes_only_temporary_marker(monkeypatch):
     application = QApplication.instance() or QApplication([])
     waypoint_map = WaypointMap()
+    collection_id = uuid4()
     scripts = []
     monkeypatch.setattr(waypoint_map, "_execute_javascript", scripts.append)
     waypoint_map._handle_load_finished(True)
     waypoint_map._handle_map_ready()
     waypoint_map._handle_first_visible_size()
+    waypoint_map.upsert_collection(collection_id, [Waypoint("Existing", 49, 13)])
     waypoint_map.set_search_result("Place", 50.0, 14.0)
-    waypoint_payload = list(waypoint_map._waypoint_payload)
+    waypoint_payload = list(waypoint_map._collection_payloads[str(collection_id)]["waypoints"])
 
     waypoint_map.clear_search_result()
 
     assert scripts[-1] == "window.setSearchResult(null);"
     assert waypoint_map._search_result_payload is None
-    assert waypoint_map._waypoint_payload == waypoint_payload
+    assert waypoint_map._collection_payloads[str(collection_id)]["waypoints"] == waypoint_payload
 
     waypoint_map.close()
     application.processEvents()
@@ -527,3 +537,52 @@ def test_escape_cancels_move_mode():
 
     map_window.close()
     application.processEvents()
+
+
+def test_collection_updates_selection_and_provider_switch_keep_unrelated_layers(monkeypatch):
+    application = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(WaypointMap, "setHtml", lambda *args: None)
+    view = WaypointMap()
+    scripts = []
+    monkeypatch.setattr(view, "_execute_javascript", scripts.append)
+    view._page_loaded = view._map_ready = view._view_visible = True
+    first_id, second_id = uuid4(), uuid4()
+    first = Waypoint("First", 50, 14)
+    second = Waypoint("Second", 51, 15)
+    track = Track("Track", "track.gpx")
+    try:
+        view.upsert_collection(first_id, [first])
+        view.upsert_collection(second_id, [second])
+        view.upsert_track(track, [TrackPoint(50, 14, 0)])
+        track_payload = dict(view._track_payloads)
+        second_payload = view._collection_payloads[str(second_id)]
+        first.name = "Updated"
+        scripts.clear()
+        view.upsert_collection(first_id, [first])
+        assert view._collection_payloads[str(first_id)]["waypoints"][0]["name"] == "Updated"
+        assert view._collection_payloads[str(second_id)] == second_payload
+        assert view._track_payloads == track_payload
+        assert not any("Track(" in script or "removeCollection(" in script for script in scripts)
+
+        scripts.clear()
+        view.set_selected_waypoint_ids([second.id])
+        assert scripts == [f'window.setSelectedWaypointIds(["{second.id}"]);']
+        collections = dict(view._collection_payloads)
+        for provider, key in [("mapy-basic", "test-key"), (OPENSTREETMAP_SOURCE_ID, "")]:
+            source, _ = resolve_map_source(provider, key)
+            scripts.clear()
+            view.set_map_source(source)
+            assert len(scripts) == 1
+            assert scripts[0].startswith("window.setMapSource(")
+            assert view._collection_payloads == collections
+            assert view._track_payloads == track_payload
+            assert view._selected_waypoint_ids == [str(second.id)]
+
+        scripts.clear()
+        view.remove_collection(first_id)
+        assert scripts == [f'window.removeCollection("{first_id}");']
+        assert view._collection_payloads == {str(second_id): second_payload}
+        assert view._track_payloads == track_payload
+    finally:
+        view.close()
+        application.processEvents()

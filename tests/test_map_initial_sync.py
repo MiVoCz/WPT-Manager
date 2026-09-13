@@ -52,7 +52,6 @@ def test_initial_sync_all_layers_in_any_readiness_order(app, monkeypatch, order)
     collection_id = uuid4()
     point = Waypoint("Prepared", 50, 14)
     track = Track("Track", "test.gpx")
-    view.set_active_waypoints([point])
     view.upsert_collection(collection_id, [point])
     view.upsert_track(track, [TrackPoint(50, 14, 0), TrackPoint(51, 15, 1)])
     view.set_selected_waypoint_ids([point.id])
@@ -81,13 +80,13 @@ def test_pending_state_uses_latest_visibility_before_ready(app, monkeypatch):
     monkeypatch.setattr(view, "_execute_javascript", scripts.append)
     hidden_id, visible_id = uuid4(), uuid4()
     hidden, visible = Waypoint("Hidden", 50, 14), Waypoint("Visible", 51, 15)
-    view.set_active_waypoints([hidden])  # Selection must not imply visibility.
+    view.set_selected_waypoint_ids([hidden.id])  # Selection must not imply visibility.
     view.upsert_collection(hidden_id, [hidden])
     view.remove_collection(hidden_id)
     view.upsert_collection(visible_id, [visible])
     ready(view)
     assert [payload["id"] for payload in collection_payloads(scripts)] == [str(visible_id)]
-    assert str(hidden.id) not in "\n".join(scripts)
+    assert all(str(hidden.id) not in str(payload) for payload in collection_payloads(scripts))
     view.close()
 
 

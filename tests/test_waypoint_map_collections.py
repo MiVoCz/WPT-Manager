@@ -193,15 +193,14 @@ def test_tooltip_contract_preserves_untrusted_names_as_text(monkeypatch):
     try:
         name = '<img src=x onerror=alert(1)><b>test</b>'
         point = Waypoint(name, 50, 14)
-        view.set_waypoints([point])
         view.upsert_collection(uuid4(), [point])
         view.set_search_result(name, 50, 14)
-        assert view._waypoint_payload[0]["name"] == name
+        assert next(iter(view._collection_payloads.values()))["waypoints"][0]["name"] == name
         assert view._search_result_payload["name"] == name
-        assert MAP_HTML.count('const tooltip = document.createElement("span");') == 3
-        assert MAP_HTML.count("tooltip.textContent = waypoint.name;") == 2
+        assert MAP_HTML.count('const tooltip = document.createElement("span");') == 2
+        assert MAP_HTML.count("tooltip.textContent = waypoint.name;") == 1
         assert "tooltip.textContent = result.name;" in MAP_HTML
-        assert MAP_HTML.count("bindTooltip(tooltip)") == 3
+        assert MAP_HTML.count("bindTooltip(tooltip)") == 2
         assert "bindTooltip(waypoint.name)" not in MAP_HTML
         assert "bindTooltip(result.name)" not in MAP_HTML
     finally:
